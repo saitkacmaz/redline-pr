@@ -15,22 +15,24 @@ Edit the sentences to say what the code *should* do. Hit **Sync** and Claude Cod
 
 ### Install
 
-`redline-pr` isn't on npm yet. Install it from source once, then use it in any repo:
+`redline-pr` isn't on npm yet. Install it from source once, then use the `redline` command in any repo:
 
 ```
 git clone https://github.com/saitkacmaz/redline-pr.git && cd redline-pr
-npm link            # installs deps, builds dist/, links the global `redline-pr` command
-redline-pr --demo   # try it without a repo
+npm link         # installs deps, builds dist/, links the global `redline` command
+redline --demo   # try it without a repo
 cd ~/work/some-repo
-redline-pr
+redline
 ```
+
+The command is also installed as `redline-pr`, if `redline` clashes with something on your machine.
 
 The demo loads a pre-baked PR: an S3 CSV ingestion endpoint with a silent `200 OK` on failure, a Postgres check-then-act race in job claiming, and three teammate comments. It needs no repo, no `gh`, and no Claude login.
 
 ## Usage
 
 ```
-redline-pr [--base main] [--pr <number>] [--demo] [--dry-run] [--port <n>] [--no-open]
+redline [--base main] [--pr <number>] [--demo] [--dry-run] [--port <n>] [--no-open]
 ```
 
 | Flag | Meaning |
@@ -70,7 +72,7 @@ redline-pr [--base main] [--pr <number>] [--demo] [--dry-run] [--port <n>] [--no
 + The handler returns 502 when no record was ingested and 207 with a `failed` list when only some records failed.
 ```
 
-The execution prompt gives Claude Code each change as CURRENT vs REQUIRED behavior, the anchors, and the reviewer comments on that sentence. It tells Claude to make the smallest change that makes each sentence true and to leave everything else alone. Comments you pushed back on are listed explicitly as "do not act on". Nothing is committed. When the run ends, the Sync sheet shows the files Claude changed and their diff (also saved as `last-run.md` in the cache directory). One successful run per session: after it, the spec no longer matches the code, so further runs are refused until you restart `redline-pr` and read the updated spec. The diff is relative to each file's contents just before the run, so edits you had already made aren't shown as Claude's.
+The execution prompt gives Claude Code each change as CURRENT vs REQUIRED behavior, the anchors, and the reviewer comments on that sentence. It tells Claude to make the smallest change that makes each sentence true and to leave everything else alone. Comments you pushed back on are listed explicitly as "do not act on". Nothing is committed. When the run ends, the Sync sheet shows the files Claude changed and their diff (also saved as `last-run.md` in the cache directory). One successful run per session: after it, the spec no longer matches the code, so further runs are refused until you restart `redline` and read the updated spec. The diff is relative to each file's contents just before the run, so edits you had already made aren't shown as Claude's.
 
 **Replies.** Only what you write is ever posted. `redline-pr` never drafts a reply for you, because a generated "fixed it" could claim a change Claude skipped. Replies you write in the margin are listed in the Sync sheet, where you can still edit them, and are posted only when you click **Post replies to GitHub**. That is separate from running Claude Code, so you can answer a reviewer without changing code, or post after you have seen what the run did. An identical reply is never posted twice (posted replies are recorded in the cache directory). Inline review comments get threaded replies. Review summaries and conversation comments get a quoted PR comment.
 

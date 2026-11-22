@@ -225,7 +225,7 @@ export async function executeSync(doc: SpecDocument, mode: SyncMode, ctx: SyncCo
 
   if (running) throw new SyncBusyError('Claude Code is already running for this spec.');
   if (appliedThisSession) {
-    throw new SyncBusyError('Edits were already applied in this session. Restart redline-pr to read the updated spec.');
+    throw new SyncBusyError('Edits were already applied in this session. Restart redline to read the updated spec.');
   }
   running = true;
   try {

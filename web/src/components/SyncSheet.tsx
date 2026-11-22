@@ -209,7 +209,7 @@ export function SyncSheet({ doc, session, result, onResult, posted, onPosted, on
 
               {session.applied && result?.mode !== 'run' && (
                 <p className="text-[15px] leading-[1.6]">
-                  Claude Code already ran in this session, so this spec no longer matches the code. Restart redline-pr to
+                  Claude Code already ran in this session, so this spec no longer matches the code. Restart redline to
                   read the updated spec.
                 </p>
               )}
@@ -232,7 +232,7 @@ export function SyncSheet({ doc, session, result, onResult, posted, onPosted, on
                   )}
                   {ran && result?.mode === 'run' && (
                     <p className="mt-5 text-[13px] text-muted">
-                      Review it with <code className="font-mono text-[0.875em]">git diff</code>, then restart redline-pr to read
+                      Review it with <code className="font-mono text-[0.875em]">git diff</code>, then restart redline to read
                       the updated spec.
                     </p>
                   )}

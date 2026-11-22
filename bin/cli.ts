@@ -21,7 +21,7 @@ import { generateSpec, modelLabel } from '../server/spec.js';
 const HELP = `redline-pr — read your PR as a behavioral spec, redline it, sync it back.
 
 Usage
-  npx redline-pr [options]
+  redline [options]          (also installed as redline-pr)
 
 Options
   --base <branch>   Base branch to diff against (default: PR base, origin/HEAD, main, master)

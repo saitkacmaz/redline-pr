@@ -5,6 +5,7 @@
   "license": "MIT",
   "type": "module",
   "bin": {
+    "redline": "./dist/bin/cli.js",
     "redline-pr": "./dist/bin/cli.js"
   },
   "files": [
