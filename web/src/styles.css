@@ -1,0 +1,50 @@
+@import "tailwindcss";
+
+@theme {
+  --color-paper: #fcfcfb;
+  --color-ink: #141413;
+  --color-muted: #6b6b68;
+  --color-rule: #e6e6e3;
+  --color-del: #b91c1c;
+  --color-ins: #15803d;
+
+  --font-sans: "Inter", "Inter Variable", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+
+@layer base {
+  html {
+    background: var(--color-paper);
+    color: var(--color-ink);
+    font-family: var(--font-sans);
+    font-feature-settings: "cv11", "ss01";
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  ::selection {
+    background: #141413;
+    color: #fcfcfb;
+  }
+
+  :focus-visible {
+    outline: 1px solid var(--color-ink);
+    outline-offset: 2px;
+  }
+
+  [contenteditable]:focus-visible,
+  textarea:focus-visible {
+    outline: none;
+  }
+
+  textarea::placeholder {
+    color: var(--color-muted);
+    opacity: 1;
+  }
+}
+
+/* Inline `code` inside prose sentences. */
+.prose-code code {
+  font-family: var(--font-mono);
+  font-size: 0.875em;
+}
