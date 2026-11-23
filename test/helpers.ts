@@ -82,7 +82,7 @@ let input = '';
 process.stdin.on('data', (d) => (input += d));
 process.stdin.on('end', () => {
   fs.appendFileSync(${JSON.stringify(logFile)}, JSON.stringify({ args, cwd: process.cwd(), input }) + '\\n');
-  out({ type: 'system', subtype: 'init' });
+  out({ type: 'system', subtype: 'init', session_id: 'fake-session-1' });
   if (args.includes('--json-schema')) {
     ${opts.failSpec ? `process.stdout.write(${JSON.stringify(opts.failSpec)}); process.exit(1);` : ''}
     const repo = args[args.indexOf('--add-dir') + 1];

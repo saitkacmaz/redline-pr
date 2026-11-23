@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { chmodSync, existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { PrListResponse, SyncResult } from '../shared/types.js';
 import { api, boot, events, fakeGh, fakeGhWithPr, rawPost, ready, runCli, settled } from './cli-harness.js';
@@ -115,6 +115,8 @@ test('live run: read-only until Sync, then only the code edit lands in the repo'
     assert.equal(result.ok, true);
     assert.deepEqual(result.changes?.files, ['src/app.js'], 'the result reports exactly what claude changed');
     assert.match(result.changes?.diff ?? '', /^\+\/\/ edited by fake claude$/m);
+    assert.equal(result.claude?.sessionId, 'fake-session-1', 'the run names its Claude Code session');
+    assert.match(readFileSync(join(cache, 'redline-pr', readdirSync(join(cache, 'redline-pr'))[0]!, 'last-run.md'), 'utf8'), new RegExp(`cd ${repo} && claude --resume fake-session-1`));
     const syncCall = readCalls(logFile).at(-1)!;
     assert.equal(syncCall.cwd, repo);
     assert.match(syncCall.input, /REQUIRED behavior: If adding throws, `add` rethrows the error\./);

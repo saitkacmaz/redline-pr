@@ -183,6 +183,8 @@ export interface SyncResult {
   claude?: {
     exitCode: number;
     output: string;
+    /** The saved Claude Code session; `claude --resume <id>` in the repo picks it up. */
+    sessionId?: string;
   };
   changes?: WorkingTreeChange;
   elapsedMs?: number;

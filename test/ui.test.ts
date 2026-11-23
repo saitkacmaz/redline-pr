@@ -163,6 +163,20 @@ describe('editing in the browser (demo)', { skip: chromePath ? false : 'no Chrom
     assert.match(await page.eval<string>(`document.querySelector('header').innerText`), /1 edit\b/);
   });
 
+  test('a server that has stopped is named as such, not "Failed to fetch"', async () => {
+    await fresh();
+    // Point the page's requests at a port nothing listens on, as if redline had exited.
+    await page.eval(`(() => { const real = window.fetch; window.fetch = (u, o) => String(u).startsWith('/api/plan') ? real('http://127.0.0.1:9/api/plan', o) : real(u, o); })()`);
+    await page.clickEl(`[...document.querySelectorAll('header button')].find((b) => b.textContent === 'Sync')`);
+    await page.waitFor(`document.querySelector('[role=dialog] [role=alert]')`);
+    const text = await page.eval<string>(`document.querySelector('[role=dialog] [role=alert]').textContent`);
+    assert.match(text, /Can’t reach redline\. It has probably stopped/);
+    assert.doesNotMatch(text, /Failed to fetch/);
+    await page.key('Escape');
+    await page.waitFor(`!document.querySelector('[role=dialog]')`);
+    await page.goto(server.url);
+  });
+
   test('the page logs no errors', () => {
     assert.deepEqual(page.errors, []);
   });

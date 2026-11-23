@@ -19,6 +19,9 @@ function sessionToken(): string {
 const isApiError = (value: unknown): value is ApiError =>
   typeof value === 'object' && value !== null && 'error' in value && typeof value.error === 'string';
 
+/** fetch() rejects with a bare "Failed to fetch" when nothing answers; say what that means here. */
+const UNREACHABLE = 'Can’t reach redline. It has probably stopped: check its terminal, and run `redline` again in your repo.';
+
 async function request<T>(path: string, body?: unknown): Promise<T> {
   const res = await fetch(path, {
     method: body === undefined ? 'GET' : 'POST',
@@ -27,8 +30,12 @@ async function request<T>(path: string, body?: unknown): Promise<T> {
       ...(body === undefined ? {} : { 'content-type': 'application/json' }),
     },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+  }).catch(() => {
+    throw new Error(UNREACHABLE);
   });
-  const data: unknown = await res.json();
+  const data: unknown = await res.json().catch(() => {
+    throw new Error(`redline answered ${res.status} with something other than JSON. Reload the page; if that doesn’t help, restart redline.`);
+  });
   if (!res.ok || isApiError(data)) {
     throw new Error(isApiError(data) ? data.error : `Request failed: ${res.status}`);
   }

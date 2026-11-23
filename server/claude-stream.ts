@@ -80,6 +80,7 @@ const ContentSchema = z.array(
 
 const EventSchema = z.looseObject({
   type: z.string(),
+  session_id: z.string().optional(),
   message: z.looseObject({ content: z.unknown() }).optional(),
 });
 
@@ -91,6 +92,7 @@ export function claudeStream(root: string | undefined, handlers: StreamHandlers)
   let buffer = '';
   let final: ClaudeResult | undefined;
   let lastText = '';
+  let session: string | undefined;
 
   const handle = (line: string): void => {
     let raw: unknown;
@@ -102,6 +104,7 @@ export function claudeStream(root: string | undefined, handlers: StreamHandlers)
     }
     const event = EventSchema.safeParse(raw);
     if (!event.success) return;
+    session ??= event.data.session_id;
     if (event.data.type === 'result') {
       final = ClaudeResultSchema.parse(raw);
       // Claude's closing notes; a structured spec result is data, not notes.
@@ -135,6 +138,10 @@ export function claudeStream(root: string | undefined, handlers: StreamHandlers)
         buffer = buffer.slice(nl + 1);
         if (line) handle(line);
       }
+    },
+    /** The Claude Code session this run was saved as, for `claude --resume`. */
+    sessionId(): string | undefined {
+      return session;
     },
     /** The final result event. Falls back to parsing a single JSON object (plain `--output-format json`). */
     result(stdout: string): ClaudeResult | undefined {

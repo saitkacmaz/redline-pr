@@ -32,6 +32,34 @@ function Label({ children }: { children: ReactNode }) {
 const anchorText = (a: { file: string; startLine: number; endLine: number }): string =>
   `${a.file}:${a.startLine}${a.endLine !== a.startLine ? `-${a.endLine}` : ''}`;
 
+const shellQuote = (path: string): string => (/^[\w@%+=:,./~-]+$/.test(path) ? path : `'${path.replace(/'/g, `'\\''`)}'`);
+
+/** The run's Claude Code session, one paste away from continuing it by hand. */
+function ResumeLine({ repo, sessionId }: { repo: string; sessionId: string }) {
+  const [copied, setCopied] = useState(false);
+  const command = `cd ${shellQuote(repo)} && claude --resume ${sessionId}`;
+  return (
+    <div className="mt-6">
+      <p className="text-[12.5px] text-muted">Continue this Claude Code session in your terminal</p>
+      <div className="mt-1 flex items-baseline gap-3">
+        <code className="min-w-0 font-mono text-[12.5px] break-all text-ink">{command}</code>
+        <button
+          type="button"
+          onClick={() =>
+            void navigator.clipboard.writeText(command).then(
+              () => setCopied(true),
+              () => setCopied(false),
+            )
+          }
+          className="shrink-0 cursor-pointer text-[12px] text-muted hover:text-ink"
+        >
+          {copied ? 'Copied' : 'Copy'}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 const plural = (n: number, one: string, many: string): string => `${n} ${n === 1 ? one : many}`;
 
 const PRIMARY =
@@ -254,6 +282,7 @@ export function SyncSheet(props: Props) {
                       </span>
                     </div>
                   )}
+                  {result.claude?.sessionId && <ResumeLine repo={session.repo} sessionId={result.claude.sessionId} />}
                   {syncActivity && <LogPeek lines={log} />}
                   {result.changes && result.changes.diff && (
                     <div className="mt-8 border-l border-ink/80 pl-4">

@@ -203,6 +203,9 @@ export const isSyncRunning = (): boolean => running;
 /** A request that conflicts with what redline is doing or has loaded (HTTP 409). */
 export class SyncBusyError extends Error {}
 
+/** Quote a path for a shell command the user will paste, only when it needs it. */
+export const shellQuote = (path: string): string => (/^[\w@%+=:,./~-]+$/.test(path) ? path : `'${path.replace(/'/g, `'\\''`)}'`);
+
 const plural = (n: number, word: string): string => `${n} ${word}${n === 1 ? '' : 's'}`;
 const seconds = (ms: number): string => `${Math.max(1, Math.round(ms / 1000))}s`;
 
@@ -245,6 +248,8 @@ export async function executeSync(doc: SpecDocument, mode: SyncMode, ctx: SyncCo
       onStdout: (chunk) => stream.push(chunk),
     });
     const final = stream.result(res.stdout);
+    const sessionId = stream.sessionId();
+    const resume = sessionId ? `\n\nContinue this session: cd ${shellQuote(ctx.workDir)} && claude --resume ${sessionId}` : '';
     const changes = await changesBetween(ctx.workDir, before, await treeState(ctx.workDir));
     const elapsedMs = Date.now() - started;
     // Claude's closing message is the readable output; stderr only matters when something broke.
@@ -260,8 +265,8 @@ export async function executeSync(doc: SpecDocument, mode: SyncMode, ctx: SyncCo
         : `Claude Code exited with code ${res.code} after changing ${files}.`;
     if (ok) tracker?.done(summary);
     else tracker?.fail(`${summary}${res.stderr.trim() ? ` ${res.stderr.trim().split('\n').at(-1)}` : ''}`);
-    await writeArtifact(ctx, 'last-run.md', `# ${summary}\n\n## Output\n\n${output}\n\n## Changes\n\n\`\`\`diff\n${changes.diff}\`\`\`\n`);
-    return { mode, ok, summary, claude: { exitCode: res.code, output }, changes, elapsedMs };
+    await writeArtifact(ctx, 'last-run.md', `# ${summary}${resume}\n\n## Output\n\n${output}\n\n## Changes\n\n\`\`\`diff\n${changes.diff}\`\`\`\n`);
+    return { mode, ok, summary, claude: { exitCode: res.code, output, ...(sessionId ? { sessionId } : {}) }, changes, elapsedMs };
   } catch (err) {
     tracker?.fail(err instanceof Error ? err.message : String(err));
     throw err;
