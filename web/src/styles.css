@@ -48,3 +48,25 @@
   font-family: var(--font-mono);
   font-size: 0.875em;
 }
+
+/* The hairline's indeterminate glide: one slow pass, no bounce. */
+@keyframes redline-glide {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(400%);
+  }
+}
+
+.redline-glide {
+  animation: redline-glide 1.8s cubic-bezier(0.45, 0, 0.55, 1) infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .redline-glide {
+    animation: none;
+    width: 100%;
+    opacity: 0.3;
+  }
+}

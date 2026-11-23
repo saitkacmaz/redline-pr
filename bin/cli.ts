@@ -8,20 +8,21 @@ import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import type { AddressInfo } from 'node:net';
 import { serve } from '@hono/node-server';
-import type { MarginComment, SessionInfo, SpecDocument } from '../shared/types.js';
+import type { LoadTarget } from '../shared/types.js';
+import { ActivityBus } from '../server/activity.js';
 import { createApp } from '../server/app.js';
 import { killAll } from '../server/exec.js';
-import { demoDocument } from '../server/demo.js';
-import { parseUnifiedDiff } from '../server/diff.js';
 import { artifactDir } from '../server/paths.js';
-import { currentBranch, diffAgainst, hasCommit, isAncestor, repoRoot, resolveBaseRef } from '../server/git.js';
-import { fetchComments, findPullRequest, ghAvailable, type PullRequest } from '../server/github.js';
-import { generateSpec, modelLabel } from '../server/spec.js';
+import { repoRoot } from '../server/git.js';
+import { Workspace } from '../server/workspace.js';
 
 const HELP = `redline-pr — read your PR as a behavioral spec, redline it, sync it back.
 
 Usage
-  redline [options]          (also installed as redline-pr)
+  redline [<pr>] [options]   (also installed as redline-pr)
+
+  redline           the current branch's PR, or its local diff if it has none
+  redline 14        PR #14 (same as --pr 14)
 
 Options
   --base <branch>   Base branch to diff against (default: PR base, origin/HEAD, main, master)
@@ -69,73 +70,6 @@ function openBrowser(url: string): void {
   const child = spawn(cmd, args, { stdio: 'ignore', detached: true });
   child.on('error', () => log(dim(`Open ${url} in your browser.`)));
   child.unref();
-}
-
-interface Loaded {
-  doc: SpecDocument;
-  workDir: string;
-  artifactDir: string;
-  canPostReplies: boolean;
-}
-
-async function loadLive(base: string | undefined, prFlag: number | undefined): Promise<Loaded> {
-  const cwd = process.cwd();
-  const root = await repoRoot(cwd).catch(() => {
-    throw new Error('Not inside a git repository. Run from your repo, or try --demo.');
-  });
-  const artifacts = artifactDir(root);
-  const branch = await currentBranch(root);
-  const hasGh = await ghAvailable(root);
-  if (prFlag && !hasGh) throw new Error('--pr needs the GitHub CLI. Install gh and run `gh auth login`.');
-  const pr = hasGh ? await findPullRequest(root, prFlag) : null;
-  const baseRef = await resolveBaseRef(root, base ?? pr?.baseRefName);
-
-  // An explicit --pr must be the work that's checked out: otherwise its comments land on an
-  // unrelated diff and replies post to the wrong PR. (Without --pr, gh matched it to this branch.)
-  // The PR head must be in this branch's own history (not already merged into the base, which
-  // every old PR is); if it was never fetched, fall back to the branch name.
-  const sameWork = async (p: PullRequest): Promise<boolean> => {
-    if (p.headRefOid === undefined || !(await hasCommit(root, p.headRefOid))) return p.headRefName === branch;
-    return (await isAncestor(root, p.headRefOid, 'HEAD')) && !(await isAncestor(root, p.headRefOid, baseRef.ref));
-  };
-  if (prFlag && pr && !(await sameWork(pr))) {
-    throw new Error(
-      `PR #${pr.number} is for branch ${pr.headRefName}, but ${branch} is checked out. Run \`gh pr checkout ${pr.number}\` first.`,
-    );
-  }
-
-  log(dim(`diffing ${branch} against ${baseRef.ref}`));
-  const rawDiff = await diffAgainst(root, baseRef.ref);
-  const files = parseUnifiedDiff(rawDiff);
-  if (files.length === 0) throw new Error(`No changes between ${branch} and ${baseRef.ref}.`);
-
-  let comments: MarginComment[] = [];
-  if (pr) {
-    try {
-      comments = await fetchComments(root, pr.number);
-      log(dim(`PR #${pr.number} · ${comments.length} comment${comments.length === 1 ? '' : 's'}`));
-    } catch (err) {
-      log(`PR #${pr.number} · could not load comments, continuing without them: ${err instanceof Error ? err.message.split('\n')[0] : String(err)}`);
-    }
-  } else {
-    log(dim(hasGh ? 'no PR found for this branch; continuing without comments' : 'gh not available; continuing without comments'));
-  }
-
-  const doc = await generateSpec(
-    {
-      prTitle: pr?.title ?? branch,
-      ...(pr ? { prNumber: pr.number } : {}),
-      branch,
-      baseBranch: baseRef.name,
-      rawDiff,
-      files,
-      comments,
-      repoRoot: root,
-      cacheDir: join(artifacts, 'cache'),
-    },
-    () => log(dim(`writing behavioral spec with claude -p · ${modelLabel()} (${files.length} files)…`)),
-  );
-  return { doc, workDir: root, artifactDir: artifacts, canPostReplies: pr !== null };
 }
 
 /**
@@ -188,7 +122,8 @@ function stopEarly(): void {
 async function main(): Promise<void> {
   process.on('SIGINT', stopEarly).on('SIGTERM', stopEarly).on('SIGHUP', stopEarly);
   process.on('exit', killAll);
-  const { values } = parseArgs({
+  const { values, positionals } = parseArgs({
+    allowPositionals: true,
     options: {
       base: { type: 'string' },
       pr: { type: 'string' },
@@ -211,7 +146,15 @@ async function main(): Promise<void> {
     if (!/^\d+$/.test(value)) throw new Error(`${flag} expects a whole number, got "${value}"`);
     return Number(value);
   };
-  const prNumber = whole('--pr', values.pr);
+  if (positionals.length > 1) throw new Error(`Expected at most one PR number, got: ${positionals.join(' ')}`);
+  const positional = positionals[0];
+  if (positional !== undefined && !/^\d+$/.test(positional)) {
+    throw new Error(`Unknown argument "${positional}". Pass a PR number (redline 14) or see --help.`);
+  }
+  const prNumber = whole('--pr', values.pr) ?? (positional !== undefined ? Number(positional) : undefined);
+  if (values.pr !== undefined && positional !== undefined && Number(positional) !== prNumber) {
+    throw new Error(`Both --pr ${values.pr} and ${positional} were given. Pass one.`);
+  }
   if (prNumber === 0) throw new Error('--pr expects a PR number, got 0');
   const port = whole('--port', values.port) ?? 0;
   if (port > 65535) throw new Error(`--port must be at most 65535, got ${port}`);
@@ -222,41 +165,40 @@ async function main(): Promise<void> {
   }
 
   console.log('\n  redline-pr');
-  const loaded: Loaded = values.demo
-    ? { doc: demoDocument(), workDir: process.cwd(), artifactDir: artifactDir(process.cwd()), canPostReplies: false }
-    : await loadLive(values.base, prNumber);
-  if (values.demo) log(dim('demo PR loaded · Sync writes a plan instead of running claude -p'));
-  log(dim(`artifacts → ${loaded.artifactDir}`));
+  // Only this has to happen before the server starts; everything else loads in the page, with progress.
+  const root = values.demo
+    ? process.cwd()
+    : await repoRoot(process.cwd()).catch(() => {
+        throw new Error('Not inside a git repository. Run from your repo, or try --demo.');
+      });
+  const artifacts = artifactDir(root);
+  if (values.demo) log(dim('demo PR · Sync writes a plan instead of running claude -p'));
+  log(dim(`artifacts → ${artifacts}`));
 
-  const session: SessionInfo = {
-    repo: loaded.workDir.startsWith(homedir()) ? `~${loaded.workDir.slice(homedir().length)}` : loaded.workDir,
+  const bus = new ActivityBus((text) => log(dim(text)));
+  const workspace = new Workspace({
+    root,
+    artifactDir: artifacts,
+    displayRoot: root.startsWith(homedir()) ? `~${root.slice(homedir().length)}` : root,
+    ...(values.base ? { base: values.base } : {}),
     demo: values.demo,
     dryRun: values['dry-run'],
-    canPostReplies: loaded.canPostReplies && !values.demo && !values['dry-run'],
-    model: modelLabel(),
-    artifactDir: loaded.artifactDir,
-    applied: false,
-  };
-
+    bus,
+  });
   const app = createApp({
-    doc: loaded.doc,
-    session,
-    sync: {
-      workDir: loaded.workDir,
-      artifactDir: loaded.artifactDir,
-      demo: session.demo,
-      dryRun: session.dryRun,
-      canPostReplies: session.canPostReplies,
-    },
+    workspace,
+    bus,
     webDir,
     token: process.env.REDLINE_DEV_TOKEN || randomBytes(24).toString('hex'),
   });
 
-  const server = await listen(app.fetch, port || stablePort(loaded.workDir, values.demo), port === 0);
+  const server = await listen(app.fetch, port || stablePort(root, values.demo), port === 0);
   const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   log(`ready → ${url}`);
   log(dim('ctrl-c to stop\n'));
   if (!values['no-open']) openBrowser(url);
+  const target: LoadTarget = prNumber ? { kind: 'pr', number: prNumber } : { kind: 'auto' };
+  workspace.load(target);
 
   process.off('SIGINT', stopEarly).off('SIGTERM', stopEarly).off('SIGHUP', stopEarly);
   const shutdown = (): void => {

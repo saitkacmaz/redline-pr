@@ -5,9 +5,12 @@ export interface DiffPart {
   text: string;
 }
 
-/** Split into words while keeping whitespace attached as separate tokens. */
+/**
+ * Split into words and whitespace. A `code span` is one token even if it has spaces,
+ * so a redline never cuts through code and leaves stray backticks behind.
+ */
 function tokenize(text: string): string[] {
-  return text.match(/\s+|[^\s]+/g) ?? [];
+  return text.match(/`[^`]*`|\s+|[^\s`]+|`/g) ?? [];
 }
 
 /**

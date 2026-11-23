@@ -2,8 +2,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { rmSync } from 'node:fs';
 import { join } from 'node:path';
-import { changesBetween, treeState } from '../server/git.js';
-import { changedPaths, git, snapshot, tempDir, write } from './helpers.js';
+import { changesBetween, resolveBaseRef, treeState } from '../server/git.js';
+import { changedPaths, git, makeRepo, snapshot, tempDir, write } from './helpers.js';
 
 test('a run is reported relative to what was on disk before it, not to HEAD', async () => {
   const dir = tempDir('tree');
@@ -52,4 +52,14 @@ test('no changes, no report', async () => {
   write(dir, 'a.js', 'dirty\n');
   const s = await treeState(dir);
   assert.deepEqual(await changesBetween(dir, s, await treeState(dir)), { files: [], diff: '' });
+});
+
+test('the auto-detected base is never the branch being reviewed', async () => {
+  const repo = makeRepo();
+  // A clone made from a checkout of `feat` points origin/HEAD at origin/feat.
+  git(repo, 'update-ref', 'refs/remotes/origin/feat', 'HEAD');
+  git(repo, 'update-ref', 'refs/remotes/origin/main', 'main');
+  git(repo, 'symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/feat');
+  assert.deepEqual(await resolveBaseRef(repo, undefined, 'feat'), { name: 'main', ref: 'origin/main' });
+  assert.deepEqual(await resolveBaseRef(repo, 'feat', 'feat'), { name: 'feat', ref: 'origin/feat' }, 'an explicit --base is taken as given');
 });

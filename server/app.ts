@@ -1,14 +1,16 @@
 import { readFile } from 'node:fs/promises';
 import { extname, join, normalize, sep } from 'node:path';
 import { Hono } from 'hono';
-import type { ApiError, PostedReply, SessionInfo, SpecDocument, SpecResponse, SyncPlan, SyncResult } from '../shared/types.js';
-import { PlanRequestSchema, PostRepliesSchema, SyncRequestSchema } from './schema.js';
-import { buildPlan, executeSync, hasApplied, mergeEdits, postWrittenReplies, SyncBusyError, type SyncContext } from './sync.js';
+import { streamSSE } from 'hono/streaming';
+import type { ApiError, PostedReply, PrListResponse, ServerEvent, SpecResponse, SyncPlan, SyncResult } from '../shared/types.js';
+import type { ActivityBus } from './activity.js';
+import { LoadRequestSchema, PlanRequestSchema, PostRepliesSchema, SyncRequestSchema } from './schema.js';
+import { SyncBusyError } from './sync.js';
+import type { Workspace } from './workspace.js';
 
 export interface AppOptions {
-  doc: SpecDocument;
-  session: SessionInfo;
-  sync: SyncContext;
+  workspace: Workspace;
+  bus: ActivityBus;
   webDir: string;
   /** Per-boot secret; every /api call must echo it so other local pages cannot drive the server. */
   token: string;
@@ -60,25 +62,53 @@ export function createApp(opts: AppOptions): Hono {
     await next();
   });
 
-  app.get('/api/spec', (c) => c.json<SpecResponse>({ session: { ...opts.session, applied: hasApplied() }, doc: opts.doc }));
+  const ws = opts.workspace;
+
+  app.get('/api/spec', (c) => c.json<SpecResponse>({ session: ws.session(), view: ws.current() }));
+
+  app.get('/api/prs', async (c) => c.json<PrListResponse>(await ws.pullRequests()));
+
+  /** Switch what's loaded, or re-read it. Returns at once; progress arrives on /api/events. */
+  app.post('/api/load', async (c) => {
+    const parsed = LoadRequestSchema.safeParse(await c.req.json<unknown>());
+    if (!parsed.success) return c.json<ApiError>({ error: parsed.error.message }, 400);
+    ws.load(parsed.data.target);
+    return c.json({ ok: true }, 202);
+  });
 
   app.post('/api/plan', async (c) => {
     const parsed = PlanRequestSchema.safeParse(await c.req.json<unknown>());
     if (!parsed.success) return c.json<ApiError>({ error: parsed.error.message }, 400);
-    return c.json<SyncPlan>(buildPlan(mergeEdits(opts.doc, parsed.data.doc)));
+    return c.json<SyncPlan>(ws.plan(parsed.data.doc));
   });
 
   app.post('/api/sync', async (c) => {
     const parsed = SyncRequestSchema.safeParse(await c.req.json<unknown>());
     if (!parsed.success) return c.json<ApiError>({ error: parsed.error.message }, 400);
-    return c.json<SyncResult>(await executeSync(mergeEdits(opts.doc, parsed.data.doc), parsed.data.mode, opts.sync));
+    return c.json<SyncResult>(await ws.sync(parsed.data.doc, parsed.data.mode));
   });
 
   app.post('/api/replies', async (c) => {
     const parsed = PostRepliesSchema.safeParse(await c.req.json<unknown>());
     if (!parsed.success) return c.json<ApiError>({ error: parsed.error.message }, 400);
-    return c.json<PostedReply[]>(await postWrittenReplies(mergeEdits(opts.doc, parsed.data.doc), parsed.data.commentIds, opts.sync));
+    return c.json<PostedReply[]>(await ws.postReplies(parsed.data.doc, parsed.data.commentIds));
   });
+
+  /** Live progress as Server-Sent Events. Read with fetch (not EventSource) so the token stays in a header. */
+  app.get('/api/events', (c) =>
+    streamSSE(c, async (stream) => {
+      const send = (event: ServerEvent): Promise<void> => stream.writeSSE({ data: JSON.stringify(event) });
+      const off = opts.bus.subscribe((event) => void send(event).catch(() => undefined));
+      stream.onAbort(off);
+      for (const event of opts.bus.snapshot()) await send(event);
+      await send({ type: 'view' });
+      while (!stream.aborted) {
+        await stream.sleep(15_000);
+        if (!stream.aborted) await stream.write(': keep-alive\n\n');
+      }
+      off();
+    }),
+  );
 
   const root = normalize(opts.webDir);
   const indexHtml = readFile(join(root, 'index.html'), 'utf8').then((html) =>

@@ -123,6 +123,44 @@ describe('editing in the browser (demo)', { skip: chromePath ? false : 'no Chrom
     await page.waitFor(`[...document.querySelectorAll('[role=dialog] button')].find((b) => b.textContent === 'Run with Claude Code' && !b.disabled)`);
     await page.clickEl(`[...document.querySelectorAll('[role=dialog] button')].find((b) => b.textContent === 'Run with Claude Code')`);
     await page.waitFor(`document.querySelector('[role=dialog]').innerText.includes('Demo mode: wrote the plan')`);
+
+    // The run is done, so the next step is right there: re-analyze, in place.
+    const reanalyze = `[...document.querySelectorAll('[role=dialog] button')].find((b) => b.textContent === 'Re-analyze diff')`;
+    await page.waitFor(reanalyze);
+    await page.clickEl(reanalyze);
+    await page.waitFor(`!document.querySelector('[role=dialog]')`);
+    await page.waitFor(`document.querySelector('header').innerText.includes('0 edits')`);
+    assert.equal(await page.eval<boolean>(`${SENTENCES}.length > 0`), true, 'a fresh spec is shown');
+    assert.equal(
+      await page.eval<boolean>(`!!document.querySelector('header [aria-hidden=true] > .bg-ink')`),
+      true,
+      'the hairline settles to a solid ink line when the reload is done',
+    );
+  });
+
+  test('the PR title opens a quiet switcher; Escape closes it and returns focus', async () => {
+    await fresh();
+    const trigger = `document.querySelector('header button[aria-haspopup=menu]')`;
+    assert.match(await page.eval<string>(`${trigger}.textContent`), /#1287/);
+    await page.clickEl(trigger);
+    await page.waitFor(`document.querySelector('[role=menu]')?.innerText.includes('The demo has one PR')`);
+    assert.equal(await page.eval<string>(`${trigger}.getAttribute('aria-expanded')`), 'true');
+    await page.key('Escape');
+    await page.waitFor(`!document.querySelector('[role=menu]')`);
+    assert.equal(await page.eval<boolean>(`document.activeElement === ${trigger}`), true);
+  });
+
+  test('Refresh reloads in place and keeps unsaved redlines', async () => {
+    await fresh();
+    await page.clickEl(sentence('always returns HTTP 200'));
+    await page.waitFor(TEXTBOX);
+    await page.type(' Kept.');
+    await page.key('Enter');
+    await page.waitFor(`document.querySelector('header').innerText.includes('1 edit')`);
+    await page.clickEl(`[...document.querySelectorAll('header button')].find((b) => b.textContent === 'Refresh')`);
+    await page.waitFor(`document.querySelector('header').innerText.includes('Ready') || !document.querySelector('main [inert]')`);
+    await page.waitFor(`${sentence('Kept.')}`);
+    assert.match(await page.eval<string>(`document.querySelector('header').innerText`), /1 edit\b/);
   });
 
   test('the page logs no errors', () => {

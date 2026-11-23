@@ -19,8 +19,8 @@ Edit the sentences to say what the code *should* do. Hit **Sync** and Claude Cod
 
 ```
 git clone https://github.com/saitkacmaz/redline-pr.git && cd redline-pr
-npm link         # installs deps, builds dist/, links the global `redline` command
-redline --demo   # try it without a repo
+npm run install-global   # builds dist/ and links the global `redline` command
+redline --demo           # try it without a repo
 cd ~/work/some-repo
 redline
 ```
@@ -32,13 +32,22 @@ The demo loads a pre-baked PR: an S3 CSV ingestion endpoint with a silent `200 O
 ## Usage
 
 ```
-redline [--base main] [--pr <number>] [--demo] [--dry-run] [--port <n>] [--no-open]
+redline            # the current branch's PR, or its local diff if it has none
+redline 14         # PR #14 (same as --pr 14)
+redline [<pr>] [--base main] [--pr <number>] [--demo] [--dry-run] [--port <n>] [--no-open]
 ```
+
+The page opens right away and loads in place. While a spec is being written or Claude Code is running, a 2px line under the top bar glides, and a status line shows the real current step (`Reading src/ingest.py · 11s`, `Editing db.py · 18s`). **Show log** opens the raw stream. Nothing is estimated; there are no percentages.
+
+- **Switch PRs** by clicking the PR title. It lists the repo's open PRs (`gh pr list`) and **Local branch diff**. A PR that isn't checked out loads from `gh pr diff`, read-only, so you can read it and reply, but Run is off until you `gh pr checkout` it and Refresh. redline never fetches or checks out for you.
+- **Refresh** re-reads the current diff and comments without restarting. Unsaved redlines are kept.
+- **Re-analyze diff** appears when a run finishes ("Synced — 2 files modified in 18s", with the files and the diff). It writes a fresh spec of the changed code and clears the redlines that were just applied, so you can check Claude's work and keep going.
+- With no PR and no local changes, the page says so and opens the PR list instead of exiting.
 
 | Flag | Meaning |
 | --- | --- |
-| `--base <branch>` | Branch to diff against. Default: the PR's base, then `origin/HEAD`, `main`, `master`, `develop`. |
-| `--pr <number>` | PR to load comments from. Default: the PR for the current branch (via `gh pr view`). |
+| `--base <branch>` | Branch to diff against. Default: the PR's base, then the repo's default branch (`origin/HEAD`, then `main`, `master`, `develop`), never the branch you're on. |
+| `--pr <number>`, or a bare number | PR to load. Default: the PR for the current branch (via `gh pr view`), else the local diff. |
 | `--demo` | Load the built-in demo PR. Sync writes `sync-plan.md` to the cache directory instead of running anything. |
 | `--dry-run` | Sync writes `sync-plan.md` to the cache directory instead of running `claude -p` or posting replies. |
 | `--port <n>` | Port to listen on. Default: a fixed port derived from the repo path (4400-4999, or any free port if that one is taken), so the page keeps the same origin and your drafts survive a restart. The server binds to `127.0.0.1` only. |
@@ -62,7 +71,7 @@ redline [--base main] [--pr <number>] [--demo] [--dry-run] [--port <n>] [--no-op
 
 **The diff.** `git diff-index -p <merge-base>` against the base branch, covering committed, staged, and unstaged changes to tracked files. Untracked files aren't included, so `git add` new files first. Lockfiles, source maps, minified files, snapshots, and anything your `.gitattributes` marks `linguist-generated` or `linguist-vendored` are excluded. Diffs too large to read in one pass (about 150k tokens) fail fast and list the largest files.
 
-**The spec.** The diff, with explicit new-side line numbers, and every review comment are piped over stdin to `claude -p --output-format json --json-schema <schema>`, with read-only access to the repository (`--add-dir`, tools `Read`, `Grep`, `Glob`). It starts in an empty temp directory rather than the repo, because Claude Code runs `git status` in its working directory on startup, and that can write `.git/index`. Claude decides what context beyond the diff is worth reading: the code the diff calls, its callers and tests, and whatever docs or contributor and agent instructions the project keeps. It has no shell (even `git status` rewrites `.git/index`) and no tools that write. None of the repo's own Claude Code configuration is loaded (`--setting-sources ""`, hooks disabled, no MCP servers, no skills), because hooks can run commands. Session persistence is off. The default Claude Code system prompt is replaced by the spec prompt. The schema-validated result is read from `structured_output`, falling back to parsing `result`. It contains sections, clauses, line anchors, an optional `riskFlag`, and a mapping from each comment to a clause. The system prompt in [`server/prompts.ts`](server/prompts.ts) requires falsifiable statements and requires the model to surface error handling, swallowed exceptions, edge cases, concurrency, and anything that fails silently. The server attaches the real diff hunks to each anchor. Results are cached by diff, comments, model, and prompt in the out-of-repo cache directory, so restarting costs nothing. Exploring the repo makes a first read take longer (minutes on a large PR) and use more of your Claude plan than reading the diff alone.
+**The spec.** The diff, with explicit new-side line numbers, and every review comment are piped over stdin to `claude -p --output-format stream-json --verbose --json-schema <schema>`, with read-only access to the repository (`--add-dir`, tools `Read`, `Grep`, `Glob`). It starts in an empty temp directory rather than the repo, because Claude Code runs `git status` in its working directory on startup, and that can write `.git/index`. Claude decides what context beyond the diff is worth reading: the code the diff calls, its callers and tests, and whatever docs or contributor and agent instructions the project keeps. It has no shell (even `git status` rewrites `.git/index`) and no tools that write. None of the repo's own Claude Code configuration is loaded (`--setting-sources ""`, hooks disabled, no MCP servers, no skills), because hooks can run commands. Session persistence is off. The default Claude Code system prompt is replaced by the spec prompt. Tool calls stream to the page as steps. The schema-validated result is read from the final event's `structured_output`, falling back to parsing `result`. It contains sections, clauses, line anchors, an optional `riskFlag`, and a mapping from each comment to a clause. The system prompt in [`server/prompts.ts`](server/prompts.ts) requires falsifiable statements and requires the model to surface error handling, swallowed exceptions, edge cases, concurrency, and anything that fails silently. The server attaches the real diff hunks to each anchor. Results are cached by diff, comments, model, and prompt in the out-of-repo cache directory, so restarting costs nothing. Exploring the repo makes a first read take longer (minutes on a large PR) and use more of your Claude plan than reading the diff alone.
 
 **Sync.** Only sentences whose text changed go into the `spec.diff`:
 
@@ -72,7 +81,7 @@ redline [--base main] [--pr <number>] [--demo] [--dry-run] [--port <n>] [--no-op
 + The handler returns 502 when no record was ingested and 207 with a `failed` list when only some records failed.
 ```
 
-The execution prompt gives Claude Code each change as CURRENT vs REQUIRED behavior, the anchors, and the reviewer comments on that sentence. It tells Claude to make the smallest change that makes each sentence true and to leave everything else alone. Comments you pushed back on are listed explicitly as "do not act on". Nothing is committed. When the run ends, the Sync sheet shows the files Claude changed and their diff (also saved as `last-run.md` in the cache directory). One successful run per session: after it, the spec no longer matches the code, so further runs are refused until you restart `redline` and read the updated spec. The diff is relative to each file's contents just before the run, so edits you had already made aren't shown as Claude's.
+The execution prompt gives Claude Code each change as CURRENT vs REQUIRED behavior, the anchors, and the reviewer comments on that sentence. It tells Claude to make the smallest change that makes each sentence true and to leave everything else alone. Comments you pushed back on are listed explicitly as "do not act on". The run uses `--output-format stream-json --verbose`, so each Read, Edit, Write, or command shows up as it happens. Nothing is committed. When the run ends, the Sync sheet shows the files Claude changed and their diff (also saved as `last-run.md` in the cache directory). After a successful run the spec no longer matches the code, so another run against it is refused until you **Re-analyze diff**. Loading is refused while Claude Code is editing. The diff is relative to each file's contents just before the run, so edits you had already made aren't shown as Claude's.
 
 **Replies.** Only what you write is ever posted. `redline-pr` never drafts a reply for you, because a generated "fixed it" could claim a change Claude skipped. Replies you write in the margin are listed in the Sync sheet, where you can still edit them, and are posted only when you click **Post replies to GitHub**. That is separate from running Claude Code, so you can answer a reviewer without changing code, or post after you have seen what the run did. An identical reply is never posted twice (posted replies are recorded in the cache directory). Inline review comments get threaded replies. Review summaries and conversation comments get a quoted PR comment.
 
@@ -115,9 +124,12 @@ VITE_REDLINE_TOKEN=dev npm run dev:web
 ```
 
 ```
-bin/cli.ts         entrypoint: args, git/gh loading, server boot
+bin/cli.ts         entrypoint: args, server boot, first load
 server/
-  app.ts           Hono routes: GET /api/spec, POST /api/plan, /api/sync, /api/replies, static UI
+  app.ts           Hono routes: /api/spec, /api/prs, /api/load, /api/plan, /api/sync, /api/replies, /api/events (SSE), static UI
+  workspace.ts     what's loaded: resolves PR/local targets, loads in place, guards runs
+  activity.ts      the one running activity and its log, broadcast to every open page
+  claude-stream.ts stream-json events → plain steps ("Editing db.py")
   prompts.ts       spec system prompt + surgical execution prompt
   spec.ts          claude -p --json-schema call, anchor/comment assembly, cache
   sync.ts          spec.diff, edit merging, export, claude -p runs, reply posting

@@ -1,19 +1,27 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import type { PostedReply, SessionInfo, SpecDocument, SyncMode, SyncPlan, SyncResult } from '../../../shared/types';
+import type { Activity, PostedReply, SessionInfo, SpecDocument, SyncMode, SyncPlan, SyncResult } from '../../../shared/types';
 import { api } from '../api';
 import { AutoTextarea } from './AutoTextarea';
+import { Hairline } from './Hairline';
 import { DiffLines } from './HunkPeek';
 import { Redline } from './Redline';
+import { LogPeek, StatusLine } from './StatusLine';
 
 interface Props {
   doc: SpecDocument;
   session: SessionInfo;
-  /** The last run's result, kept by the app so closing the sheet doesn't lose it. */
+  canPostReplies: boolean;
+  /** Why Run is unavailable for this spec (e.g. the PR isn't checked out). */
+  runBlocked?: string | undefined;
+  /** The last run's result, kept by the app (and the server) so closing the sheet doesn't lose it. */
   result: SyncResult | null;
   onResult: (result: SyncResult) => void;
+  activity: Activity | null;
+  log: string[];
   posted: Record<string, PostedReply>;
   onPosted: (replies: PostedReply[]) => void;
   onReply: (commentId: string, text: string) => void;
+  onReanalyze: () => void;
   onClose: () => void;
 }
 
@@ -31,13 +39,16 @@ const PRIMARY =
 const SECONDARY =
   'h-9 cursor-pointer rounded-[3px] border border-rule px-4 text-[13.5px] text-ink hover:border-ink/40 disabled:cursor-default disabled:opacity-35';
 
-export function SyncSheet({ doc, session, result, onResult, posted, onPosted, onReply, onClose }: Props) {
+export function SyncSheet(props: Props) {
+  const { doc, session, canPostReplies, runBlocked, result, onResult, activity, log, posted, onPosted, onReply, onReanalyze, onClose } = props;
   const [plan, setPlan] = useState<SyncPlan | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<SyncMode | 'post' | null>(null);
   const [exported, setExported] = useState<string | null>(null);
   const [showPrompt, setShowPrompt] = useState(false);
   const heading = useRef<HTMLHeadingElement>(null);
+  const syncActivity = activity?.kind === 'sync' ? activity : null;
+  const running = busy === 'run' || syncActivity?.state === 'running';
 
   useEffect(() => heading.current?.focus(), []);
 
@@ -61,7 +72,7 @@ export function SyncSheet({ doc, session, result, onResult, posted, onPosted, on
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
-      if (e.key !== 'Escape' || busy) return;
+      if (e.key !== 'Escape' || busy || running) return;
       // Escape inside a reply leaves the field; a second Escape closes the sheet.
       const target = e.target as HTMLElement | null;
       if (target?.tagName === 'TEXTAREA') {
@@ -72,7 +83,7 @@ export function SyncSheet({ doc, session, result, onResult, posted, onPosted, on
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [busy, onClose]);
+  }, [busy, running, onClose]);
 
   const attempt = async (what: SyncMode | 'post', fn: () => Promise<void>): Promise<void> => {
     setBusy(what);
@@ -100,9 +111,12 @@ export function SyncSheet({ doc, session, result, onResult, posted, onPosted, on
   const postReplies = (): Promise<void> =>
     attempt('post', async () => onPosted(await api.replies(doc, unposted.map((c) => c.id))));
 
-  const ran = (result?.mode === 'run' && result.ok && !session.demo && !session.dryRun) || session.applied;
+  // A run that finished cleanly leaves this spec describing code that no longer exists: re-analyze next.
+  const ran = result?.mode === 'run' && result.ok;
   const hasEdits = (plan?.entries.length ?? 0) > 0;
-  const runNote = session.demo
+  const runNote = runBlocked
+    ? runBlocked
+    : session.demo
     ? 'Demo: Run writes the plan to sync-plan.md in redline’s cache instead of running Claude Code.'
     : session.dryRun
       ? 'Dry run: Run writes the plan to sync-plan.md in redline’s cache instead of running Claude Code.'
@@ -124,12 +138,13 @@ export function SyncSheet({ doc, session, result, onResult, posted, onPosted, on
           <button
             type="button"
             onClick={onClose}
-            disabled={busy !== null}
+            disabled={busy !== null || running}
             className="ml-auto cursor-pointer text-[13px] text-muted hover:text-ink disabled:cursor-default disabled:opacity-40"
           >
             Close <span className="text-muted">esc</span>
           </button>
         </div>
+        <Hairline activity={syncActivity} />
       </div>
 
       <div className="mx-auto max-w-[760px] px-6 pt-12 pb-32">
@@ -178,8 +193,13 @@ export function SyncSheet({ doc, session, result, onResult, posted, onPosted, on
               {!ran && (
                 <>
                   <div className="flex flex-wrap items-center gap-3">
-                    <button type="button" disabled={busy !== null || !hasEdits} onClick={() => void run()} className={PRIMARY}>
-                      {busy === 'run' ? 'Running…' : 'Run with Claude Code'}
+                    <button
+                      type="button"
+                      disabled={busy !== null || running || !hasEdits || runBlocked !== undefined}
+                      onClick={() => void run()}
+                      className={PRIMARY}
+                    >
+                      {running ? 'Running…' : 'Run with Claude Code'}
                     </button>
                     <button type="button" disabled={busy !== null} onClick={() => void exportDiff()} className={SECONDARY}>
                       {busy === 'export' ? 'Exporting…' : 'Copy / Export Spec Diff'}
@@ -193,7 +213,14 @@ export function SyncSheet({ doc, session, result, onResult, posted, onPosted, on
                       {showPrompt ? 'hide prompt' : 'show prompt'}
                     </button>
                   </div>
-                  <p className="mt-3 text-[12.5px] text-muted">{busy === 'run' ? 'This can take several minutes. Keep this tab open.' : runNote}</p>
+                  {running && syncActivity ? (
+                    <div className="mt-5">
+                      <StatusLine activity={syncActivity} />
+                      <LogPeek lines={log} />
+                    </div>
+                  ) : (
+                    <p className="mt-3 text-[12.5px] text-muted">{runNote}</p>
+                  )}
                   {exported && (
                     <p aria-live="polite" className="mt-2 text-[12.5px] text-ink">
                       {exported}
@@ -207,18 +234,29 @@ export function SyncSheet({ doc, session, result, onResult, posted, onPosted, on
                 </>
               )}
 
-              {session.applied && result?.mode !== 'run' && (
-                <p className="text-[15px] leading-[1.6]">
-                  Claude Code already ran in this session, so this spec no longer matches the code. Restart redline to
-                  read the updated spec.
-                </p>
-              )}
-              {result?.mode === 'run' && (
+              {result?.mode === 'run' && !running && (
                 <div aria-live="polite" className={ran ? '' : 'mt-8'}>
-                  <p className={`text-[15px] leading-[1.6] ${result.ok ? 'text-ink' : 'text-del'}`}>{result.summary}</p>
+                  <p className={`leading-[1.5] ${ran ? 'text-[17px] font-medium text-ink' : 'text-[15px] text-del'}`}>{result.summary}</p>
+                  {result.changes && result.changes.files.length > 0 && (
+                    <ul className="mt-2 font-mono text-[12.5px] leading-[1.7] text-ink">
+                      {result.changes.files.map((f) => (
+                        <li key={f}>{f}</li>
+                      ))}
+                    </ul>
+                  )}
+                  {ran && (
+                    <div className="mt-6 flex flex-wrap items-center gap-x-4 gap-y-2">
+                      <button type="button" onClick={onReanalyze} className={PRIMARY}>
+                        Re-analyze diff
+                      </button>
+                      <span className="text-[12.5px] text-muted">
+                        Reads the updated code and writes a fresh spec. These redlines are cleared.
+                      </span>
+                    </div>
+                  )}
+                  {syncActivity && <LogPeek lines={log} />}
                   {result.changes && result.changes.diff && (
-                    <div className="mt-5 border-l border-ink/80 pl-4">
-                      <div className="mb-1.5 font-mono text-[11.5px] text-muted">{result.changes.files.join('  ')}</div>
+                    <div className="mt-8 border-l border-ink/80 pl-4">
                       <DiffLines hunk={result.changes.diff} />
                     </div>
                   )}
@@ -230,10 +268,9 @@ export function SyncSheet({ doc, session, result, onResult, posted, onPosted, on
                       </pre>
                     </details>
                   )}
-                  {ran && result?.mode === 'run' && (
+                  {ran && !session.demo && !session.dryRun && (
                     <p className="mt-5 text-[13px] text-muted">
-                      Review it with <code className="font-mono text-[0.875em]">git diff</code>, then restart redline to read
-                      the updated spec.
+                      Nothing was committed. Review it with <code className="font-mono text-[0.875em]">git diff</code>.
                     </p>
                   )}
                 </div>
@@ -276,7 +313,7 @@ export function SyncSheet({ doc, session, result, onResult, posted, onPosted, on
                 )}
                 {replies.length > 0 && (
                   <div className="mt-8">
-                    {session.canPostReplies ? (
+                    {canPostReplies ? (
                       <>
                         <button
                           type="button"

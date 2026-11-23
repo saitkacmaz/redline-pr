@@ -31,6 +31,8 @@ export interface SpecSection {
 }
 
 export interface SpecDocument {
+  /** Identifies this loaded spec. Edits made against a different (older) spec are refused. */
+  id: string;
   prTitle: string;
   prNumber?: number;
   branch: string;
@@ -44,20 +46,73 @@ export interface SpecDocument {
 export interface SessionInfo {
   /** Repository root, with the home directory shortened to ~. */
   repo: string;
+  /** The branch checked out in the repo (as of the last load). */
+  branch: string;
   demo: boolean;
   dryRun: boolean;
-  canPostReplies: boolean;
   model: string;
   /** Out-of-repo directory where plans, exports, and caches are written. */
   artifactDir: string;
-  /** A Claude Code run already succeeded in this session; the spec is stale until restart. */
-  applied: boolean;
 }
+
+/** What the server has loaded right now. */
+export type SpecView =
+  | { status: 'loading'; label: string }
+  | {
+      status: 'ready';
+      doc: SpecDocument;
+      canPostReplies: boolean;
+      /** Why Run with Claude Code is unavailable for this spec, if it is. */
+      runBlocked?: string;
+      /** The last Run for this spec. After a real, successful one the spec is stale until re-analyzed. */
+      result?: SyncResult;
+    }
+  | { status: 'empty'; message: string }
+  | { status: 'error'; message: string };
 
 export interface SpecResponse {
   session: SessionInfo;
-  doc: SpecDocument;
+  view: SpecView;
 }
+
+/** What to load: the current branch's PR (or its local diff), a specific PR, or the local diff. */
+export type LoadTarget = { kind: 'auto' } | { kind: 'local' } | { kind: 'pr'; number: number } | { kind: 'current' };
+
+export interface PrListItem {
+  number: number;
+  title: string;
+  author: string;
+  headRefName: string;
+  /** This PR's branch is what's checked out, so Claude Code can apply edits to it. */
+  checkedOut: boolean;
+}
+
+export interface PrListResponse {
+  prs: PrListItem[];
+  branch: string;
+  /** What's loaded now. */
+  current: { kind: 'pr'; number: number } | { kind: 'local' } | null;
+  /** Why the list is empty or incomplete, in one sentence. */
+  note?: string;
+}
+
+/* ---- Live progress (Server-Sent Events on /api/events) ---- */
+
+export interface Activity {
+  id: number;
+  kind: 'spec' | 'sync';
+  state: 'running' | 'done' | 'error';
+  /** The real current step, e.g. "Editing src/ingest.py". */
+  step: string;
+  startedAt: number;
+  endedAt?: number;
+}
+
+export type ServerEvent =
+  | { type: 'activity'; activity: Activity }
+  | { type: 'log'; id: number; line: string }
+  /** The loaded spec changed; refetch /api/spec. */
+  | { type: 'view' };
 
 /** One edited sentence in the surgical spec.diff. */
 export interface SpecDiffEntry {
@@ -130,6 +185,7 @@ export interface SyncResult {
     output: string;
   };
   changes?: WorkingTreeChange;
+  elapsedMs?: number;
 }
 
 export interface ApiError {

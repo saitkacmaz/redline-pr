@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { PostRepliesRequest, SpecDocument, SyncRequest } from '../shared/types.js';
+import type { LoadTarget, PostRepliesRequest, SpecDocument, SyncRequest } from '../shared/types.js';
 
 const CodeAnchorSchema = z.object({
   file: z.string(),
@@ -20,6 +20,7 @@ const MarginCommentSchema = z.object({
 });
 
 const SpecDocumentSchema: z.ZodType<SpecDocument> = z.object({
+  id: z.string(),
   prTitle: z.string(),
   prNumber: z.number().optional(),
   branch: z.string(),
@@ -53,3 +54,12 @@ export const PostRepliesSchema: z.ZodType<PostRepliesRequest> = z.object({
   doc: SpecDocumentSchema,
   commentIds: z.array(z.string()),
 });
+
+const LoadTargetSchema: z.ZodType<LoadTarget> = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('auto') }),
+  z.object({ kind: z.literal('local') }),
+  z.object({ kind: z.literal('current') }),
+  z.object({ kind: z.literal('pr'), number: z.number().int().positive() }),
+]);
+
+export const LoadRequestSchema = z.object({ target: LoadTargetSchema });

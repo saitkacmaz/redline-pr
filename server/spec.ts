@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { rmSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { z } from 'zod';
 import type { MarginComment, SpecDocument, SpecSection } from '../shared/types.js';
 import { findFile, hunkFor, numberedDiff, type ParsedFile } from './diff.js';
+import { claudeStream, type ClaudeResult, type StreamHandlers } from './claude-stream.js';
 import { run } from './exec.js';
 import { SPEC_SYSTEM_PROMPT, buildSpecUserPrompt } from './prompts.js';
 
@@ -47,13 +48,6 @@ type LlmSpec = z.infer<typeof LlmSpecSchema>;
 const { $schema: _metaSchema, ...specJsonSchema } = z.toJSONSchema(LlmSpecSchema);
 const SPEC_JSON_SCHEMA = JSON.stringify(specJsonSchema);
 
-/** The single result object `claude -p --output-format json` prints. */
-const ClaudeResultSchema = z.object({
-  subtype: z.string().optional(),
-  is_error: z.boolean().optional(),
-  result: z.string().optional(),
-  structured_output: z.unknown().optional(),
-});
 
 export interface SpecInput {
   prTitle: string;
@@ -63,9 +57,17 @@ export interface SpecInput {
   rawDiff: string;
   files: ParsedFile[];
   comments: MarginComment[];
-  /** The repository root. Claude runs here with read-only tools. */
+  /** The repository root. Claude reads it with read-only tools. */
   repoRoot: string;
+  /** Set when the files on disk are not the code this diff produces (a PR that isn't checked out). */
+  contextNote?: string;
   cacheDir: string;
+}
+
+export interface SpecHooks extends StreamHandlers {
+  /** Runs only when claude -p is actually about to be called (not on a cache hit). */
+  onGenerate?: () => void;
+  signal?: AbortSignal;
 }
 
 const SUBTYPES: Record<string, string> = {
@@ -150,12 +152,13 @@ const READ_ONLY_TOOLS = 'Read,Grep,Glob';
  * skills), since hooks can run commands and write files; session persistence
  * is off. The diff arrives over stdin.
  */
-async function callModel(input: SpecInput): Promise<LlmSpec> {
+async function callModel(input: SpecInput, hooks: SpecHooks): Promise<LlmSpec> {
   const model = resolveModel();
   const args = [
     '-p',
     '--output-format',
-    'json',
+    'stream-json',
+    '--verbose',
     '--json-schema',
     SPEC_JSON_SCHEMA,
     '--system-prompt',
@@ -182,23 +185,27 @@ async function callModel(input: SpecInput): Promise<LlmSpec> {
     numberedDiff: numberedDiff(input.files),
     comments: input.comments,
     repoRoot: input.repoRoot,
+    ...(input.contextNote ? { contextNote: input.contextNote } : {}),
   });
 
   checkBudget(input.files, prompt);
   const scratch = await mkdtemp(join(tmpdir(), 'redline-pr-'));
   const cleanup = () => rmSync(scratch, { recursive: true, force: true });
   process.once('exit', cleanup); // Ctrl-C mid-generation exits before `finally` runs.
-  const res = await run('claude', args, { cwd: scratch, input: prompt, timeoutMs: SPEC_TIMEOUT_MS }).finally(() => {
+  const stream = claudeStream(input.repoRoot, hooks);
+  const res = await run('claude', args, {
+    cwd: scratch,
+    input: prompt,
+    timeoutMs: SPEC_TIMEOUT_MS,
+    onStdout: (chunk) => stream.push(chunk),
+    ...(hooks.signal ? { signal: hooks.signal } : {}),
+  }).finally(() => {
     process.off('exit', cleanup);
     cleanup();
   });
+  if (hooks.signal?.aborted) throw new Error('Stopped.');
 
-  let parsed: z.infer<typeof ClaudeResultSchema> | undefined;
-  try {
-    parsed = ClaudeResultSchema.parse(JSON.parse(res.stdout));
-  } catch {
-    parsed = undefined;
-  }
+  const parsed: ClaudeResult | undefined = stream.result(res.stdout);
 
   if (!parsed || res.code !== 0 || parsed.is_error) throw new Error(describeFailure(res, parsed));
 
@@ -262,6 +269,7 @@ function assemble(input: SpecInput, spec: LlmSpec): SpecDocument {
   });
 
   return {
+    id: randomBytes(8).toString('hex'),
     prTitle: input.prTitle,
     ...(input.prNumber !== undefined ? { prNumber: input.prNumber } : {}),
     branch: input.branch,
@@ -277,15 +285,13 @@ function distance(clause: { anchors: { startLine: number; endLine: number }[] },
   );
 }
 
-/**
- * Generate the spec, reusing a cached copy when the diff, comments, and model are unchanged.
- * `onGenerate` runs only when claude -p is actually about to be called.
- */
-export async function generateSpec(input: SpecInput, onGenerate: () => void = () => {}): Promise<SpecDocument> {
+/** Generate the spec, reusing a cached copy when the diff, comments, model, and prompt are unchanged. */
+export async function generateSpec(input: SpecInput, hooks: SpecHooks = {}): Promise<SpecDocument> {
   const key = createHash('sha256')
     .update(modelLabel())
     .update(SPEC_JSON_SCHEMA)
     .update(SPEC_SYSTEM_PROMPT)
+    .update(input.contextNote ?? '')
     .update(input.rawDiff)
     .update(JSON.stringify(input.comments.map((c) => [c.id, c.body])))
     .digest('hex')
@@ -298,8 +304,8 @@ export async function generateSpec(input: SpecInput, onGenerate: () => void = ()
     // Cache miss or stale format; regenerate.
   }
 
-  onGenerate();
-  const spec = await callModel(input);
+  hooks.onGenerate?.();
+  const spec = await callModel(input, hooks);
   await mkdir(input.cacheDir, { recursive: true, mode: 0o700 });
   await writeFile(cacheFile, JSON.stringify(spec, null, 2), { mode: 0o600 });
   return assemble(input, spec);

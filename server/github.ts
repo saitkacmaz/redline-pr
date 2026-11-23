@@ -56,6 +56,32 @@ export async function findPullRequest(cwd: string, prNumber?: number): Promise<P
   return PrSchema.parse(JSON.parse(res.stdout));
 }
 
+const PrListSchema = z.array(
+  z.object({
+    number: z.number(),
+    title: z.string(),
+    headRefName: z.string(),
+    baseRefName: z.string(),
+    headRefOid: z.string().optional(),
+    author: z.object({ login: z.string() }).nullable().optional(),
+  }),
+);
+export type PrListEntry = z.infer<typeof PrListSchema>[number];
+
+/** Open PRs in this repo, newest first. Read-only. */
+export async function listPullRequests(cwd: string): Promise<PrListEntry[]> {
+  const out = await runOk('gh', ['pr', 'list', '--state', 'open', '--limit', '100', '--json', 'number,title,headRefName,baseRefName,headRefOid,author'], { cwd });
+  return PrListSchema.parse(JSON.parse(out));
+}
+
+/**
+ * A PR's diff from GitHub, for a PR that isn't checked out. Read-only, and nothing is
+ * fetched into .git (a `git fetch` would write to the repo).
+ */
+export async function pullRequestDiff(cwd: string, prNumber: number): Promise<string> {
+  return runOk('gh', ['pr', 'diff', String(prNumber), '--color', 'never'], { cwd });
+}
+
 /** `gh api --paginate --jq '.[]'` emits one JSON object per line regardless of page count. */
 async function apiList<T>(cwd: string, path: string, schema: z.ZodType<T>): Promise<T[]> {
   const out = await runOk('gh', ['api', '--paginate', path, '--jq', '.[]'], { cwd });

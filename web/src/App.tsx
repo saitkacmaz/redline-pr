@@ -1,33 +1,94 @@
 import { useCallback, useEffect, useReducer, useRef, useState } from 'react';
-import type { MarginComment, PostedReply, SessionInfo, SyncResult } from '../../shared/types';
-import { api } from './api';
+import type { Activity, LoadTarget, MarginComment, PostedReply, SessionInfo, SpecView, SyncResult } from '../../shared/types';
+import { api, subscribe } from './api';
 import { Margin } from './components/Margin';
 import { Section } from './components/Section';
+import { LogPeek, StatusLine } from './components/StatusLine';
 import { SyncSheet } from './components/SyncSheet';
 import { TopBar } from './components/TopBar';
-import { isEdited, reducer, restoreDraft, saveDraft } from './state';
+import { clearDraft, isEdited, reducer, restoreDraft, saveDraft } from './state';
 
 const ROW = 'lg:grid lg:grid-cols-[680px_340px] lg:gap-x-[100px]';
+const MAX_LOG_LINES = 400;
+
+/** The server's current activity and its log, live over /api/events. Calls `onView` when the loaded spec changes. */
+function useActivity(onView: () => void): { activity: Activity | null; log: string[]; connected: boolean } {
+  const [activity, setActivity] = useState<Activity | null>(null);
+  const [log, setLog] = useState<string[]>([]);
+  const [connected, setConnected] = useState(true);
+  const logFor = useRef<number | null>(null);
+  const viewRef = useRef(onView);
+  viewRef.current = onView;
+
+  useEffect(
+    () =>
+      subscribe(
+        (event) => {
+          if (event.type === 'view') viewRef.current();
+          else if (event.type === 'activity') {
+            if (logFor.current !== event.activity.id) {
+              logFor.current = event.activity.id;
+              setLog([]);
+            }
+            setActivity(event.activity);
+          } else if (event.id === logFor.current) {
+            setLog((lines) => [...lines.slice(-(MAX_LOG_LINES - 1)), event.line]);
+          }
+        },
+        setConnected,
+      ),
+    [],
+  );
+  return { activity, log, connected };
+}
 
 export function App() {
   const [doc, dispatch] = useReducer(reducer, null);
   const [session, setSession] = useState<SessionInfo | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [view, setView] = useState<SpecView | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [syncing, setSyncing] = useState(false);
+  const [switcher, setSwitcher] = useState(false);
   const [result, setResult] = useState<SyncResult | null>(null);
   const [posted, setPosted] = useState<Record<string, PostedReply>>({});
   const syncButton = useRef<HTMLButtonElement>(null);
+  const docId = useRef<string | null>(null);
+  const seq = useRef(0);
+  const everReady = useRef(false);
 
-  useEffect(() => {
-    api
-      .spec()
-      .then(({ doc: loaded, session: s }) => {
-        setSession(s);
-        dispatch({ type: 'load', doc: restoreDraft(loaded) });
-        document.title = `redline · ${loaded.prTitle}`;
-      })
-      .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)));
+  const refresh = useCallback(async () => {
+    const mine = ++seq.current;
+    try {
+      const res = await api.spec();
+      if (mine !== seq.current) return; // a newer refresh is on its way
+      setSession(res.session);
+      setView(res.view);
+      setNotice(null);
+      const v = res.view;
+      if (v.status === 'ready') {
+        everReady.current = true;
+        if (v.doc.id !== docId.current) {
+          docId.current = v.doc.id;
+          dispatch({ type: 'load', doc: restoreDraft(v.doc) });
+          setPosted({});
+        }
+        setResult(v.result ?? null);
+        document.title = `redline · ${v.doc.prTitle}`;
+      } else if (v.status !== 'loading') {
+        docId.current = null;
+        dispatch({ type: 'load', doc: null });
+        setResult(null);
+        setSyncing(false);
+        // Nothing to show on launch: offer the PRs. After the user picked something, don't pop it open again.
+        if (v.status === 'empty' && !everReady.current) setSwitcher(true);
+      }
+    } catch (e) {
+      if (mine === seq.current) setNotice(e instanceof Error ? e.message : String(e));
+    }
   }, []);
+
+  const { activity, log, connected } = useActivity(() => void refresh());
+  useEffect(() => void refresh(), [refresh]);
 
   useEffect(() => {
     if (doc) saveDraft(doc);
@@ -46,75 +107,135 @@ export function App() {
     (replies: PostedReply[]) => setPosted((prev) => ({ ...prev, ...Object.fromEntries(replies.map((r) => [r.commentId, r])) })),
     [],
   );
+  const load = useCallback((target: LoadTarget) => {
+    setNotice(null);
+    api.load(target).catch((e: unknown) => setNotice(e instanceof Error ? e.message : String(e)));
+  }, []);
+  /** After a run: read the changed code again and start a fresh spec. The applied redlines are done with. */
+  const reanalyze = useCallback(() => {
+    if (doc) clearDraft(doc);
+    setSyncing(false);
+    load({ kind: 'current' });
+    requestAnimationFrame(() => syncButton.current?.focus());
+  }, [doc, load]);
 
-  if (error) {
+  if (!session || !view) {
     return (
       <main className="mx-auto max-w-[680px] px-6 pt-24">
-        <p className="text-[16px] leading-[1.65] text-del">{error}</p>
+        <p className={`text-[15px] ${notice ? 'text-del' : 'text-muted'}`}>{notice ?? 'Connecting…'}</p>
       </main>
     );
   }
-  if (!doc || !session) {
-    return (
-      <main className="mx-auto max-w-[680px] px-6 pt-24">
-        <p className="text-[15px] text-muted">Loading spec…</p>
-      </main>
-    );
-  }
 
-  const clauses = doc.sections.flatMap((s) => s.clauses);
-  const edits = clauses.filter(isEdited).length;
+  const loading = view.status === 'loading';
+  const ready = view.status === 'ready' ? view : null;
+  const specActivity = activity?.kind === 'spec' ? activity : null;
+  const busy = loading || activity?.state === 'running';
+  const clauses = doc?.sections.flatMap((s) => s.clauses) ?? [];
   const clauseIds = new Set(clauses.map((c) => c.id));
-  const orphans = doc.comments.filter((c) => !clauseIds.has(c.clauseId));
+  const orphans = doc?.comments.filter((c) => !clauseIds.has(c.clauseId)) ?? [];
+  const mode = session.demo ? 'demo' : session.dryRun ? 'dry run' : null;
 
   return (
     <>
       {/* Everything behind the sheet is inert, so Tab and screen readers stay inside it. */}
       <div inert={syncing}>
-        <TopBar ref={syncButton} doc={doc} session={session} edits={edits} onSync={() => setSyncing(true)} />
+        <TopBar
+          ref={syncButton}
+          title={doc?.prTitle ?? (loading ? `Loading ${view.label}…` : session.branch || 'redline')}
+          prNumber={doc?.prNumber}
+          branch={doc?.branch ?? session.branch}
+          mode={mode}
+          counts={doc ? { edits: clauses.filter(isEdited).length, comments: doc.comments.length } : null}
+          busy={busy}
+          canSync={ready !== null && doc !== null && !loading}
+          activity={activity}
+          switcherOpen={switcher}
+          onSwitcherOpen={setSwitcher}
+          onPick={load}
+          onRefresh={() => load({ kind: 'current' })}
+          onSync={() => setSyncing(true)}
+        />
 
         <main className="mx-auto max-w-[1120px] px-6 pt-14 pb-40 lg:px-0">
           <div className={`${ROW} mb-12`}>
-            <div>
-              <p className="text-[13px] text-muted">
-                Behavioral spec of <span className="font-mono text-[12px]">{doc.branch}</span> against{' '}
-                <span className="font-mono text-[12px]">{doc.baseBranch}</span>. Edit any sentence to say what the code
-                should do.
-              </p>
+            <div aria-live="polite">
+              {!connected && (
+                <p className="mb-3 text-[13px] text-del">Lost the connection to redline. Is it still running in your terminal?</p>
+              )}
+              {notice && <p className="mb-3 text-[13px] text-del">{notice}</p>}
+              {loading ? (
+                specActivity ? (
+                  <>
+                    <StatusLine activity={specActivity} />
+                    <LogPeek lines={log} />
+                  </>
+                ) : (
+                  <p className="font-mono text-[12.5px] text-muted">Starting…</p>
+                )
+              ) : view.status === 'error' ? (
+                <>
+                  <p className="text-[15px] leading-[1.6] whitespace-pre-line text-del">{view.message}</p>
+                  <LogPeek lines={specActivity ? log : []} />
+                </>
+              ) : view.status === 'empty' ? (
+                <>
+                  <p className="text-[15px] leading-[1.6] text-ink">{view.message}</p>
+                  <p className="mt-1 text-[13px] text-muted">Pick a pull request from the title above, or make a change and Refresh.</p>
+                </>
+              ) : (
+                doc && (
+                  <p className="text-[13px] text-muted">
+                    Behavioral spec of <span className="font-mono text-[12px]">{doc.branch}</span> against{' '}
+                    <span className="font-mono text-[12px]">{doc.baseBranch}</span>. Edit any sentence to say what the code
+                    should do.
+                  </p>
+                )
+              )}
             </div>
           </div>
 
-          {doc.sections.map((section) => (
-            <Section
-              key={section.id}
-              section={section}
-              comments={doc.comments}
-              dispatch={dispatch}
-              onReply={onReply}
-              onStatus={onStatus}
-            />
-          ))}
+          {doc && (
+            // While a new spec loads, the old one stays visible for reference but can't be edited.
+            <div inert={loading} className={`transition-opacity duration-300 ${loading ? 'opacity-40' : ''}`}>
+              {doc.sections.map((section) => (
+                <Section
+                  key={section.id}
+                  section={section}
+                  comments={doc.comments}
+                  dispatch={dispatch}
+                  onReply={onReply}
+                  onStatus={onStatus}
+                />
+              ))}
 
-          {orphans.length > 0 && (
-            <section className={`${ROW} border-t border-rule pt-8`}>
-              <p className="text-[13px] text-muted">Comments not tied to a sentence</p>
-              <aside className="mt-4 lg:mt-0">
-                <Margin comments={orphans} onReply={onReply} onStatus={onStatus} />
-              </aside>
-            </section>
+              {orphans.length > 0 && (
+                <section className={`${ROW} border-t border-rule pt-8`}>
+                  <p className="text-[13px] text-muted">Comments not tied to a sentence</p>
+                  <aside className="mt-4 lg:mt-0">
+                    <Margin comments={orphans} onReply={onReply} onStatus={onStatus} />
+                  </aside>
+                </section>
+              )}
+            </div>
           )}
         </main>
       </div>
 
-      {syncing && (
+      {syncing && doc && ready && (
         <SyncSheet
           doc={doc}
           session={session}
+          canPostReplies={ready.canPostReplies}
+          runBlocked={ready.runBlocked}
           result={result}
           onResult={setResult}
+          activity={activity}
+          log={log}
           posted={posted}
           onPosted={onPosted}
           onReply={onReply}
+          onReanalyze={reanalyze}
           onClose={closeSync}
         />
       )}

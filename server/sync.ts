@@ -11,6 +11,8 @@ import type {
   SyncPlan,
   SyncResult,
 } from '../shared/types.js';
+import type { Tracker } from './activity.js';
+import { claudeStream } from './claude-stream.js';
 import { run } from './exec.js';
 import { changesBetween, treeState } from './git.js';
 import { postReplies } from './github.js';
@@ -195,17 +197,20 @@ async function writeArtifact(ctx: SyncContext, name: string, contents: string): 
 
 /** One Claude Code run at a time: a second click or tab must not apply the same edits twice. */
 let running = false;
-/**
- * After a successful run the code no longer matches the spec this session loaded, so every
- * CURRENT -> REQUIRED pair in a later prompt would be stale. One run per session; restart to re-read.
- */
-let appliedThisSession = false;
 
-export const hasApplied = (): boolean => appliedThisSession;
+export const isSyncRunning = (): boolean => running;
 
+/** A request that conflicts with what redline is doing or has loaded (HTTP 409). */
 export class SyncBusyError extends Error {}
 
-export async function executeSync(doc: SpecDocument, mode: SyncMode, ctx: SyncContext): Promise<SyncResult> {
+const plural = (n: number, word: string): string => `${n} ${word}${n === 1 ? '' : 's'}`;
+const seconds = (ms: number): string => `${Math.max(1, Math.round(ms / 1000))}s`;
+
+/**
+ * Run (or export) the edited sentences. A real run streams its steps to `track`.
+ * The caller refuses a second run against a spec that a run already made stale.
+ */
+export async function executeSync(doc: SpecDocument, mode: SyncMode, ctx: SyncContext, track?: () => Tracker): Promise<SyncResult> {
   const plan = buildPlan(doc);
 
   if (mode === 'export') {
@@ -224,31 +229,42 @@ export async function executeSync(doc: SpecDocument, mode: SyncMode, ctx: SyncCo
   }
 
   if (running) throw new SyncBusyError('Claude Code is already running for this spec.');
-  if (appliedThisSession) {
-    throw new SyncBusyError('Edits were already applied in this session. Restart redline to read the updated spec.');
-  }
   running = true;
+  const started = Date.now();
+  const tracker = track?.();
   try {
     const before = await treeState(ctx.workDir);
-    const res = await run('claude', ['-p', ...claudeFlags()], {
+    const stream = claudeStream(ctx.workDir, {
+      onStep: (step) => tracker?.step(step),
+      onLog: (line) => tracker?.log(line),
+    });
+    const res = await run('claude', ['-p', '--output-format', 'stream-json', '--verbose', ...claudeFlags()], {
       cwd: ctx.workDir,
       input: plan.prompt,
       timeoutMs: CLAUDE_TIMEOUT_MS,
+      onStdout: (chunk) => stream.push(chunk),
     });
+    const final = stream.result(res.stdout);
     const changes = await changesBetween(ctx.workDir, before, await treeState(ctx.workDir));
-    const output = [res.stdout.trim(), res.stderr.trim()].filter(Boolean).join('\n\n');
-    const ok = res.code === 0;
-    if (ok) appliedThisSession = true;
-    const files = `${changes.files.length} file${changes.files.length === 1 ? '' : 's'}`;
+    const elapsedMs = Date.now() - started;
+    // Claude's closing message is the readable output; stderr only matters when something broke.
+    const output = [final?.result?.trim() ?? (final ? '' : res.stdout.trim()), res.stderr.trim()].filter(Boolean).join('\n\n');
+    const ok = res.code === 0 && final?.is_error !== true;
+    const files = plural(changes.files.length, 'file');
     const summary = res.timedOut
       ? `Claude Code was stopped after ${CLAUDE_TIMEOUT_MS / 60000} minutes. It changed ${files} before that.`
       : ok
         ? changes.files.length > 0
-          ? `Claude Code changed ${files}. Nothing was committed.`
-          : 'Claude Code finished without changing any files.'
+          ? `Synced — ${files} modified in ${seconds(elapsedMs)}`
+          : `Claude Code finished in ${seconds(elapsedMs)} without changing any files.`
         : `Claude Code exited with code ${res.code} after changing ${files}.`;
+    if (ok) tracker?.done(summary);
+    else tracker?.fail(`${summary}${res.stderr.trim() ? ` ${res.stderr.trim().split('\n').at(-1)}` : ''}`);
     await writeArtifact(ctx, 'last-run.md', `# ${summary}\n\n## Output\n\n${output}\n\n## Changes\n\n\`\`\`diff\n${changes.diff}\`\`\`\n`);
-    return { mode, ok, summary, claude: { exitCode: res.code, output }, changes };
+    return { mode, ok, summary, claude: { exitCode: res.code, output }, changes, elapsedMs };
+  } catch (err) {
+    tracker?.fail(err instanceof Error ? err.message : String(err));
+    throw err;
   } finally {
     running = false;
   }

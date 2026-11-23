@@ -1,7 +1,7 @@
 import type { MarginComment, SpecDocument } from '../../shared/types';
 
 export type Action =
-  | { type: 'load'; doc: SpecDocument }
+  | { type: 'load'; doc: SpecDocument | null }
   | { type: 'editClause'; clauseId: string; text: string }
   | { type: 'resetClause'; clauseId: string }
   | { type: 'reply'; commentId: string; text: string }
@@ -73,6 +73,15 @@ export function saveDraft(doc: SpecDocument): void {
     localStorage.setItem(draftKey(doc), JSON.stringify(draft));
   } catch {
     // Storage full or disabled; drafts just won't persist.
+  }
+}
+
+/** Forget a spec's redlines, e.g. once Claude Code has applied them. */
+export function clearDraft(doc: SpecDocument): void {
+  try {
+    localStorage.removeItem(draftKey(doc));
+  } catch {
+    // Storage disabled; nothing to clear.
   }
 }
 

@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import type { MarginComment, SpecDocument } from '../shared/types.js';
 import { hunkFor, parseUnifiedDiff } from './diff.js';
 
@@ -300,6 +301,7 @@ const COMMENTS: MarginComment[] = [
 export function demoDocument(): SpecDocument {
   const files = parseUnifiedDiff(DEMO_DIFF);
   return {
+    id: randomBytes(8).toString('hex'),
     prTitle: 'Add S3 CSV ingestion endpoint and Postgres job queue',
     prNumber: 1287,
     branch: 'feat/s3-ingest-pipeline',

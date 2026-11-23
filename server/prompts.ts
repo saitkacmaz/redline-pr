@@ -72,6 +72,7 @@ export interface SpecPromptInput {
   numberedDiff: string;
   comments: MarginComment[];
   repoRoot: string;
+  contextNote?: string;
 }
 
 export function buildSpecUserPrompt(input: SpecPromptInput): string {
@@ -87,7 +88,7 @@ export function buildSpecUserPrompt(input: SpecPromptInput): string {
 
   return `PR: ${input.prTitle}
 Branch: ${input.branch} -> ${input.baseBranch}
-Repository: ${input.repoRoot}
+Repository: ${input.repoRoot}${input.contextNote ? `\nNote: ${input.contextNote}` : ''}
 
 <review_comments>
 ${comments}

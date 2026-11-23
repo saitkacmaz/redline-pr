@@ -17,11 +17,12 @@
   "scripts": {
     "build": "npm run build:web && npm run build:server",
     "build:web": "vite build",
-    "build:server": "tsc -p tsconfig.build.json",
+    "build:server": "tsc -p tsconfig.build.json && node -e \"require('fs').chmodSync('dist/bin/cli.js', 0o755)\"",
     "typecheck": "tsc --noEmit",
     "dev:web": "vite",
     "demo": "tsx bin/cli.ts --demo",
     "start": "node dist/bin/cli.js",
+    "install-global": "npm run build && npm link",
     "prepare": "npm run build",
     "test": "node --import tsx --test --test-reporter=spec \"test/**/*.test.ts\"",
     "pretest": "npm run build"

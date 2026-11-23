@@ -38,6 +38,16 @@ const EXCLUDED_PATHS = [
   '*.snap',
 ];
 
+/** Drop the same generated files from a diff that didn't come from `diffAgainst` (e.g. `gh pr diff`). */
+export function isExcludedPath(path: string): boolean {
+  const name = path.split('/').pop() ?? path;
+  return EXCLUDED_PATHS.some((p) => (p.startsWith('*') ? name.endsWith(p.slice(1)) : name === p));
+}
+
+export async function headCommit(cwd: string): Promise<string> {
+  return (await runOk('git', ['rev-parse', 'HEAD'], { cwd })).trim();
+}
+
 export async function repoRoot(cwd: string): Promise<string> {
   return (await runOk('git', ['rev-parse', '--show-toplevel'], { cwd })).trim();
 }
@@ -61,8 +71,12 @@ async function refExists(cwd: string, ref: string): Promise<boolean> {
   return res.code === 0;
 }
 
-/** Resolve a base branch name to a ref that exists locally, preferring the remote-tracking copy. */
-export async function resolveBaseRef(cwd: string, base: string | undefined): Promise<{ name: string; ref: string }> {
+/**
+ * Resolve a base branch name to a ref that exists locally, preferring the remote-tracking copy.
+ * Without an explicit base, the repo's default branch (origin/HEAD, then main, master, develop),
+ * trying `current` last: diffing a branch against itself is always empty.
+ */
+export async function resolveBaseRef(cwd: string, base: string | undefined, current?: string): Promise<{ name: string; ref: string }> {
   const candidates = base ? [base] : [];
   if (!base) {
     const head = await run('git', ['symbolic-ref', '--quiet', '--short', 'refs/remotes/origin/HEAD'], { cwd });
@@ -70,7 +84,9 @@ export async function resolveBaseRef(cwd: string, base: string | undefined): Pro
     candidates.push('main', 'master', 'develop');
   }
 
-  for (const name of candidates) {
+  // The current branch goes last: only if nothing else exists (then the diff is honestly empty).
+  const ordered = base ? candidates : [...candidates.filter((n) => n !== current), ...candidates.filter((n) => n === current)];
+  for (const name of ordered) {
     for (const ref of [`origin/${name}`, name]) {
       if (await refExists(cwd, ref)) return { name, ref };
     }

@@ -3,8 +3,8 @@ import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { chmodSync, existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import type { SpecResponse, SyncResult } from '../shared/types.js';
-import { api, boot, fakeGh, fakeGhWithPr, rawPost, runCli } from './cli-harness.js';
+import type { PrListResponse, SyncResult } from '../shared/types.js';
+import { api, boot, events, fakeGh, fakeGhWithPr, rawPost, ready, runCli, settled } from './cli-harness.js';
 import { request } from 'node:http';
 import type { PostedReply } from '../shared/types.js';
 import { changedPaths, fakeClaude, git, makeRepo, readCalls, snapshot, tempDir } from './helpers.js';
@@ -51,7 +51,7 @@ test('--demo boots and guards the API with the page token', async () => {
   try {
     assert.ok(r.token.length >= 32);
     assert.equal((await fetch(`${r.url}/api/spec`)).status, 403);
-    const spec = await api<SpecResponse>(r, '/api/spec');
+    const spec = await ready(r);
     assert.equal(spec.session.demo, true);
     assert.ok(spec.doc.sections.length > 0);
   } finally {
@@ -78,9 +78,10 @@ test('live run: read-only until Sync, then only the code edit lands in the repo'
   const before = snapshot(repo);
   const r = await boot([], { cwd: repo, env });
   try {
-    const { doc, session } = await api<SpecResponse>(r, '/api/spec');
+    const { doc, view } = await ready(r);
     assert.equal(doc.sections[0]?.clauses[0]?.anchors[0]?.hunk.startsWith('@@'), true, 'anchor got a real hunk');
-    assert.equal(session.canPostReplies, false);
+    assert.equal(view.canPostReplies, false);
+    assert.equal(view.runBlocked, undefined);
 
     // The spec call: diff over stdin, repo readable with read-only tools only,
     // none of the repo's Claude config (hooks can write files), no session saved, never --bare.
@@ -124,8 +125,20 @@ test('live run: read-only until Sync, then only the code edit lands in the repo'
     doc.sections[0]!.clauses[0]!.currentText = 'If adding throws, `add` logs and rethrows.';
     const more = await rawPost(r, '/api/sync', { doc, mode: 'run' });
     assert.equal(more.status, 409, 'nor is any later run against the now-stale spec');
-    assert.equal((await api<SpecResponse>(r, '/api/spec')).session.applied, true, 'a reloaded page knows a run happened');
+    assert.match(more.body, /Re-analyze/);
+    assert.equal((await ready(r)).view.result?.ok, true, 'a reloaded page knows a run happened');
     assert.equal(readCalls(logFile).filter((c) => !c.args.includes('--json-schema')).length, 1);
+
+    // Re-analyze: the changed code gets a fresh spec (a new id), and that one can be run again.
+    await api(r, '/api/load', { target: { kind: 'current' } });
+    const fresh = await ready(r);
+    assert.notEqual(fresh.doc.id, doc.id);
+    assert.equal(fresh.view.result, undefined);
+    assert.equal(readCalls(logFile).filter((c) => c.args.includes('--json-schema')).length, 2, 'the changed diff is read again');
+    const stale = await rawPost(r, '/api/plan', { doc });
+    assert.equal(stale.status, 409, 'edits made against the old spec are refused');
+    fresh.doc.sections[0]!.clauses[0]!.currentText = 'If adding throws, `add` logs and rethrows.';
+    assert.equal((await api<SyncResult>(r, '/api/sync', { doc: fresh.doc, mode: 'run' })).ok, true);
   } finally {
     await r.stop();
   }
@@ -141,25 +154,31 @@ test('a cached spec is reused without calling claude again', async () => {
   const outputs: string[] = [];
   for (let i = 0; i < 2; i++) {
     const r = await boot([], { cwd: repo, env });
+    await ready(r);
     outputs.push(r.output());
     await r.stop();
   }
-  assert.match(outputs[0]!, /writing behavioral spec/);
+  assert.match(outputs[0]!, /Drafting behavioral spec/);
   const url = (o: string): string | undefined => /ready → (\S+)/.exec(o)?.[1];
   assert.equal(url(outputs[0]!), url(outputs[1]!), 'same repo, same origin, so browser drafts survive a restart');
-  assert.doesNotMatch(outputs[1]!, /writing behavioral spec/, 'a cache hit does not claim to call claude');
+  assert.doesNotMatch(outputs[1]!, /Drafting behavioral spec/, 'a cache hit does not claim to call claude');
   assert.equal(readCalls(logFile).filter((c) => c.args.includes('--json-schema')).length, 1);
 });
 
-test('a failing claude -p exits 1 with its message and writes nothing to the repo', async () => {
+test('a failing claude -p shows its message in the page and writes nothing to the repo', async () => {
   const repo = makeRepo();
   const { binDir } = fakeClaude(SPEC, { failSpec: JSON.stringify({ type: 'result', is_error: true, result: 'Not logged in · Please run /login' }) });
   fakeGh(binDir);
   const before = snapshot(repo);
-  const { code, out } = await runCli(['--no-open'], { cwd: repo, env: { XDG_CACHE_HOME: tempDir('cache'), PATH: `${binDir}:${process.env.PATH ?? ''}` } });
-  assert.equal(code, 1);
-  assert.match(out, /Not logged in/);
-  assert.match(out, /log in/);
+  const r = await boot([], { cwd: repo, env: { XDG_CACHE_HOME: tempDir('cache'), PATH: `${binDir}:${process.env.PATH ?? ''}` } });
+  try {
+    const { view } = await settled(r);
+    assert.equal(view.status, 'error');
+    assert.match(view.status === 'error' ? view.message : '', /Not logged in.*log in/s);
+    assert.match(r.output(), /Not logged in/, 'the terminal says so too');
+  } finally {
+    await r.stop();
+  }
   assert.deepEqual(changedPaths(before, snapshot(repo)), []);
 });
 
@@ -169,8 +188,8 @@ test('replies post only on request, only what the user wrote, and never twice', 
   const posts = fakeGhWithPr(binDir);
   const r = await boot([], { cwd: repo, env: { XDG_CACHE_HOME: tempDir('cache'), PATH: `${binDir}:${process.env.PATH ?? ''}` } });
   try {
-    const { doc, session } = await api<SpecResponse>(r, '/api/spec');
-    assert.equal(session.canPostReplies, true);
+    const { doc, view } = await ready(r);
+    assert.equal(view.canPostReplies, true);
     assert.equal(doc.comments[0]?.clauseId, 's1-c1');
 
     // Editing a sentence and running drafts and posts nothing.
@@ -229,15 +248,30 @@ test('a port in use gets a one-line explanation, not a stack trace', async () =>
   }
 });
 
-test('--pr for a different branch is refused before anything is loaded', async () => {
+test('a PR that is not checked out is read from gh pr diff, and Run is refused', async () => {
   const repo = makeRepo();
-  git(repo, 'checkout', '-qb', 'unrelated');
   const { binDir, logFile } = fakeClaude(SPEC);
   fakeGhWithPr(binDir);
-  const { code, out } = await runCli(['--pr', '7', '--no-open'], { cwd: repo, env: { XDG_CACHE_HOME: tempDir('cache'), PATH: `${binDir}:${process.env.PATH ?? ''}` } });
-  assert.equal(code, 1);
-  assert.match(out, /PR #7 is for branch feat, but unrelated is checked out/);
-  assert.equal(readCalls(logFile).length, 0, 'no spec is generated');
+  const before = snapshot(repo);
+  const r = await boot(['8'], { cwd: repo, env: { XDG_CACHE_HOME: tempDir('cache'), PATH: `${binDir}:${process.env.PATH ?? ''}` } });
+  try {
+    const { doc, view } = await ready(r);
+    assert.equal(doc.prNumber, 8);
+    assert.equal(doc.branch, 'other');
+    assert.match(view.runBlocked ?? '', /PR #8 isn’t checked out.*gh pr checkout 8/);
+    const spec = readCalls(logFile).find((c) => c.args.includes('--json-schema'))!;
+    assert.match(spec.input, /\+export const two = 2;/, 'the diff came from GitHub');
+    assert.match(spec.input, /has feat checked out, not this PR's branch \(other\)/, 'Claude is told the files on disk differ');
+
+    doc.sections[0]!.clauses[0]!.currentText = 'Something else.';
+    const run = await rawPost(r, '/api/sync', { doc, mode: 'run' });
+    assert.equal(run.status, 409);
+    assert.match(run.body, /gh pr checkout 8/);
+    assert.equal(readCalls(logFile).filter((c) => !c.args.includes('--json-schema')).length, 0, 'claude never ran to edit');
+  } finally {
+    await r.stop();
+  }
+  assert.deepEqual(changedPaths(before, snapshot(repo)), [], 'nothing was fetched or checked out');
 });
 
 test('a shallow clone explains how to fetch the missing history', async () => {
@@ -250,9 +284,13 @@ test('a shallow clone explains how to fetch the missing history', async () => {
   git(clone, 'checkout', '-q', 'feat');
   const { binDir } = fakeClaude(SPEC);
   fakeGh(binDir);
-  const { code, out } = await runCli(['--base', 'main', '--no-open'], { cwd: clone, env: { XDG_CACHE_HOME: tempDir('cache'), PATH: `${binDir}:${process.env.PATH ?? ''}` } });
-  assert.equal(code, 1);
-  assert.match(out, /shallow clone.*git fetch --unshallow/);
+  const r = await boot(['--base', 'main'], { cwd: clone, env: { XDG_CACHE_HOME: tempDir('cache'), PATH: `${binDir}:${process.env.PATH ?? ''}` } });
+  try {
+    const { view } = await settled(r);
+    assert.match(view.status === 'error' ? view.message : '', /shallow clone.*git fetch --unshallow/);
+  } finally {
+    await r.stop();
+  }
 });
 
 test('two tabs posting the same reply at once post it once', async () => {
@@ -261,7 +299,7 @@ test('two tabs posting the same reply at once post it once', async () => {
   const posts = fakeGhWithPr(binDir, { postDelayMs: 400 });
   const r = await boot([], { cwd: repo, env: { XDG_CACHE_HOME: tempDir('cache'), PATH: `${binDir}:${process.env.PATH ?? ''}` } });
   try {
-    const { doc } = await api<SpecResponse>(r, '/api/spec');
+    const { doc } = await ready(r);
     doc.comments[0]!.replyDraft = 'On it.';
     await Promise.all([
       api<PostedReply[]>(r, '/api/replies', { doc, commentIds: ['rc-11'] }),
@@ -273,7 +311,7 @@ test('two tabs posting the same reply at once post it once', async () => {
   }
 });
 
-test('--pr for a PR already merged into the base is refused; a renamed checkout of the PR head is not', async () => {
+test('a PR already merged into the base is not this checkout; a renamed checkout of the PR head is', async () => {
   const repo = makeRepo();
   const mainSha = git(repo, 'rev-parse', 'main').trim();
   const headSha = git(repo, 'rev-parse', 'HEAD').trim();
@@ -281,14 +319,21 @@ test('--pr for a PR already merged into the base is refused; a renamed checkout 
 
   const old = fakeClaude(SPEC);
   fakeGhWithPr(old.binDir, { headRefName: 'old-feature', headRefOid: mainSha });
-  const refused = await runCli(['--pr', '7', '--no-open'], { cwd: repo, env: env(old.binDir) });
-  assert.equal(refused.code, 1);
-  assert.match(refused.out, /PR #7 is for branch old-feature/);
+  const merged = await boot(['--pr', '7'], { cwd: repo, env: env(old.binDir) });
+  try {
+    assert.match((await ready(merged)).view.runBlocked ?? '', /PR #7 isn’t checked out/);
+  } finally {
+    await merged.stop();
+  }
 
   const renamed = fakeClaude(SPEC);
   fakeGhWithPr(renamed.binDir, { headRefName: 'someone/feat', headRefOid: headSha });
   const r = await boot(['--pr', '7'], { cwd: repo, env: env(renamed.binDir) });
-  await r.stop();
+  try {
+    assert.equal((await ready(r)).view.runBlocked, undefined);
+  } finally {
+    await r.stop();
+  }
 });
 
 test('Ctrl-C while the spec is being written stops claude too', async () => {
@@ -314,8 +359,87 @@ test('Ctrl-C while the spec is being written stops claude too', async () => {
 test('POSTs from an IPv6 loopback origin are allowed', async () => {
   const r = await boot(['--demo'], { cwd: tempDir('demo'), env: { XDG_CACHE_HOME: tempDir('cache') } });
   try {
-    const { doc } = await api<SpecResponse>(r, '/api/spec');
+    const { doc } = await ready(r);
     assert.equal((await rawPost(r, '/api/plan', { doc }, { origin: 'http://[::1]:5173' })).status, 200);
+  } finally {
+    await r.stop();
+  }
+});
+
+test('a positional number is the PR; two different PR numbers, or a stray word, are refused', async () => {
+  const repo = makeRepo();
+  const { binDir } = fakeClaude(SPEC);
+  fakeGhWithPr(binDir, { currentPr: false });
+  const env = { XDG_CACHE_HOME: tempDir('cache'), PATH: `${binDir}:${process.env.PATH ?? ''}` };
+  const r = await boot(['7'], { cwd: repo, env });
+  try {
+    assert.equal((await ready(r)).doc.prNumber, 7, '`redline 7` loads PR #7 even though the branch lookup finds none');
+  } finally {
+    await r.stop();
+  }
+  const both = await runCli(['7', '--pr', '8'], { cwd: repo, env });
+  assert.equal(both.code, 1);
+  assert.match(both.out, /Both --pr 8 and 7/);
+  const word = await runCli(['seven'], { cwd: repo, env });
+  assert.equal(word.code, 1);
+  assert.match(word.out, /Unknown argument "seven"/);
+});
+
+test('no PR and no local changes: the page still boots, says so, and lists PRs to switch to', async () => {
+  const repo = makeRepo();
+  git(repo, 'checkout', '-q', 'main');
+  const { binDir, logFile } = fakeClaude(SPEC);
+  fakeGhWithPr(binDir, { currentPr: false });
+  const before = snapshot(repo);
+  const r = await boot([], { cwd: repo, env: { XDG_CACHE_HOME: tempDir('cache'), PATH: `${binDir}:${process.env.PATH ?? ''}` } });
+  try {
+    const { view, session } = await settled(r);
+    assert.equal(view.status, 'empty');
+    assert.match(view.status === 'empty' ? view.message : '', /No changes on main against main/);
+    assert.equal(session.branch, 'main');
+    assert.equal(readCalls(logFile).length, 0, 'nothing to send to claude');
+
+    const prs = await api<PrListResponse>(r, '/api/prs');
+    assert.deepEqual(prs.prs.map((p) => [p.number, p.author, p.checkedOut]), [[7, 'ana', false], [8, 'bo', false]]);
+
+    // Switch in place, then back to the local diff, without restarting.
+    await api(r, '/api/load', { target: { kind: 'pr', number: 7 } });
+    assert.equal((await ready(r)).doc.prNumber, 7);
+    assert.deepEqual((await api<PrListResponse>(r, '/api/prs')).current, { kind: 'pr', number: 7 });
+    await api(r, '/api/load', { target: { kind: 'local' } });
+    assert.equal((await settled(r)).view.status, 'empty');
+  } finally {
+    await r.stop();
+  }
+  assert.deepEqual(changedPaths(before, snapshot(repo)), []);
+});
+
+test('/api/events streams the real steps of a load and a run', async () => {
+  const repo = makeRepo();
+  const { binDir } = fakeClaude(SPEC, { syncDelayMs: 300 });
+  fakeGh(binDir);
+  const r = await boot([], { cwd: repo, env: { XDG_CACHE_HOME: tempDir('cache'), PATH: `${binDir}:${process.env.PATH ?? ''}` } });
+  try {
+    const { doc } = await ready(r);
+    const loadSteps = (await events(r, () => api(r, '/api/load', { target: { kind: 'current' } })))
+      .flatMap((e) => (e.type === 'activity' ? [`${e.activity.state}:${e.activity.step}`] : []));
+    assert.ok(loadSteps.includes('running:Reading the diff of feat against main'), loadSteps.join('\n'));
+    assert.ok(loadSteps.at(-1)?.startsWith('done:Ready'), loadSteps.join('\n'));
+
+    const { doc: current } = await ready(r);
+    assert.notEqual(current.id, doc.id);
+    current.sections[0]!.clauses[0]!.currentText = 'If adding throws, `add` rethrows the error.';
+    let blocked = 0;
+    const runEvents = await events(r, async () => {
+      const run = api<SyncResult>(r, '/api/sync', { doc: current, mode: 'run' });
+      await new Promise((res) => setTimeout(res, 150));
+      blocked = (await rawPost(r, '/api/load', { target: { kind: 'current' } })).status;
+      return run;
+    });
+    assert.equal(blocked, 409, 'reloading waits for Claude Code to finish editing');
+    const steps = runEvents.flatMap((e) => (e.type === 'activity' && e.activity.kind === 'sync' ? [`${e.activity.state}:${e.activity.step}`] : []));
+    assert.deepEqual(steps, ['running:Starting Claude Code', 'running:Editing src/app.js', 'done:Synced — 1 file modified in 1s']);
+    assert.ok(runEvents.some((e) => e.type === 'log' && e.line.endsWith('Change 1: edited src/app.js')), 'Claude’s notes are in the log');
   } finally {
     await r.stop();
   }

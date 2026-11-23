@@ -13,6 +13,10 @@ export interface RunOptions {
   input?: string;
   timeoutMs?: number;
   env?: NodeJS.ProcessEnv;
+  /** Called with each stdout chunk as it arrives (stdout is still collected). */
+  onStdout?: (chunk: string) => void;
+  /** Aborting stops the child's whole process group; the result then has code 130. */
+  signal?: AbortSignal;
 }
 
 const KILL_GRACE_MS = 5000;
@@ -64,12 +68,22 @@ export function run(cmd: string, args: readonly string[], opts: RunOptions = {})
         }, opts.timeoutMs),
       );
     }
+    const abort = (): void => {
+      killGroup(child, 'SIGTERM');
+      timers.push(setTimeout(() => killGroup(child, 'SIGKILL'), KILL_GRACE_MS));
+    };
+    if (opts.signal?.aborted) abort();
+    opts.signal?.addEventListener('abort', abort, { once: true });
     const done = (): void => {
       for (const t of timers) clearTimeout(t);
+      opts.signal?.removeEventListener('abort', abort);
       live.delete(child);
     };
 
-    child.stdout.setEncoding('utf8').on('data', (chunk: string) => (stdout += chunk));
+    child.stdout.setEncoding('utf8').on('data', (chunk: string) => {
+      stdout += chunk;
+      opts.onStdout?.(chunk);
+    });
     child.stderr.setEncoding('utf8').on('data', (chunk: string) => (stderr += chunk));
     child.stdin.on('error', () => {
       // The child exited before reading all input; its exit code tells the story.
@@ -80,7 +94,7 @@ export function run(cmd: string, args: readonly string[], opts: RunOptions = {})
     });
     child.on('close', (code) => {
       done();
-      resolve({ code: timedOut ? 124 : (code ?? 1), stdout, stderr, timedOut });
+      resolve({ code: timedOut ? 124 : opts.signal?.aborted ? 130 : (code ?? 1), stdout, stderr, timedOut });
     });
 
     if (opts.input !== undefined) child.stdin.end(opts.input);

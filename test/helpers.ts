@@ -64,26 +64,36 @@ export function changedPaths(before: Map<string, string>, after: Map<string, str
 }
 
 /**
- * A fake `claude` on PATH. Spec calls (with --json-schema) get `specJson` as
- * structured_output; sync calls append a line to src/app.js, like a real edit.
- * Every invocation's argv and stdin are logged to `logFile` for assertions.
+ * A fake `claude` on PATH that speaks `--output-format stream-json`. Spec calls (with
+ * --json-schema) "read" src/app.js and return `specJson` as structured_output; sync calls
+ * "edit" src/app.js by appending a line, like a real edit. Every invocation's argv and
+ * stdin are logged to `logFile` for assertions. `syncDelayMs` holds a sync run open.
  */
-export function fakeClaude(specJson: unknown, opts: { failSpec?: string } = {}): { binDir: string; logFile: string } {
+export function fakeClaude(specJson: unknown, opts: { failSpec?: string; syncDelayMs?: number } = {}): { binDir: string; logFile: string } {
   const binDir = tempDir('bin');
   const logFile = join(binDir, 'calls.jsonl');
   const script = `#!/usr/bin/env node
 const fs = require('node:fs');
+const path = require('node:path');
 const args = process.argv.slice(2);
+const out = (event) => process.stdout.write(JSON.stringify(event) + '\\n');
+const tool = (name, input) => out({ type: 'assistant', message: { content: [{ type: 'tool_use', name, input }] } });
 let input = '';
 process.stdin.on('data', (d) => (input += d));
 process.stdin.on('end', () => {
   fs.appendFileSync(${JSON.stringify(logFile)}, JSON.stringify({ args, cwd: process.cwd(), input }) + '\\n');
+  out({ type: 'system', subtype: 'init' });
   if (args.includes('--json-schema')) {
     ${opts.failSpec ? `process.stdout.write(${JSON.stringify(opts.failSpec)}); process.exit(1);` : ''}
-    process.stdout.write(JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result: '', structured_output: ${JSON.stringify(specJson)} }));
+    const repo = args[args.indexOf('--add-dir') + 1];
+    tool('Read', { file_path: path.join(repo, 'src/app.js') });
+    out({ type: 'result', subtype: 'success', is_error: false, result: '', structured_output: ${JSON.stringify(specJson)} });
   } else {
-    fs.appendFileSync('src/app.js', '// edited by fake claude\\n');
-    process.stdout.write('Change 1: edited src/app.js');
+    tool('Edit', { file_path: path.join(process.cwd(), 'src/app.js') });
+    setTimeout(() => {
+      fs.appendFileSync('src/app.js', '// edited by fake claude\\n');
+      out({ type: 'result', subtype: 'success', is_error: false, result: 'Change 1: edited src/app.js' });
+    }, ${opts.syncDelayMs ?? 0});
   }
 });
 `;
