@@ -19,6 +19,7 @@ Edit the sentences to say what the code *should* do. Hit **Sync** and Claude Cod
 
 ```
 git clone https://github.com/saitkacmaz/redline-pr.git && cd redline-pr
+npm install
 npm run install-global   # builds dist/ and links the global `redline` command
 redline --demo           # try it without a repo
 cd ~/work/some-repo
@@ -64,7 +65,7 @@ The page opens right away and loads in place. While a spec is being written or C
 | Variable | Default | |
 | --- | --- | --- |
 | `REDLINE_MODEL` | your `claude` default | Passed to `claude --model` when writing the spec, e.g. `sonnet` or `opus`. |
-| `REDLINE_CLAUDE_FLAGS` | `--permission-mode acceptEdits` | Flags passed to `claude -p` on Sync, split like a shell would (quotes keep `--allowedTools "Bash(npm test)"` together). Set to an empty string to use your Claude Code defaults. |
+| `REDLINE_CLAUDE_FLAGS` | `--permission-mode acceptEdits` | Flags passed to `claude -p` on Sync, split like a shell would. The default lets Claude edit files but not run commands, so it can't run your tests. To allow that: `REDLINE_CLAUDE_FLAGS='--permission-mode acceptEdits --allowedTools "Bash(npm test)"' redline`. Set to an empty string to use your Claude Code defaults. |
 | `XDG_CACHE_HOME` | `~/.cache` | Root for all runtime artifacts (see below). Must be outside the repo. |
 
 ## How it works
@@ -95,14 +96,14 @@ Your edits are saved in the browser's `localStorage` per branch. Because each re
 
 - **Artifacts live outside the repo.** Spec caches, sync plans, and exports go to `$XDG_CACHE_HOME/redline-pr/<sha256 of the repo's real path>/`, which defaults to `~/.cache/redline-pr/…`. The directory is created only when something is written to it, with `0700` permissions and `0600` files. The CLI prints its location at startup. Delete it whenever you like. If `XDG_CACHE_HOME` resolves to a path inside the repo, `redline-pr` refuses to start.
 - **Git, gh, and the spec writer are read-only.** Diff and `gh` output are read into memory and never written to disk. The diff comes from plumbing `git diff-index`, not porcelain `git diff`: porcelain refreshes stale stat data and writes `.git/index` back (even with `GIT_OPTIONAL_LOCKS=0`, e.g. after an editor re-saves an unchanged file). While writing the spec, Claude Code gets only read-only file tools, and none of the repo's hooks or settings. The test suite checks every byte of a repo, `.git` included, before and after a run.
-- **No temp files on Sync.** The prompt is piped to `claude -p` over stdin.
+- **No temp files in the repo.** Prompts are piped to `claude -p` over stdin. The only scratch files (an empty working folder for the spec writer, and before-copies of changed files used to show a run's diff) go in the OS temp directory and are deleted when done.
 - **Edits stay in the browser.** Your in-progress sentence edits and replies are kept in `localStorage`.
 
 The one exception is what you ask for: **Run with Claude Code** lets Claude Code edit source files in the repo to apply your spec changes. Those edits are the point of the tool, and they show up in `git status` for you to review.
 
 ## Security
 
-The local server binds to `127.0.0.1` and requires a per-launch token, which is injected into the page, on every `/api` call. Other sites open in your browser can't trigger a sync. Requests whose `Host` isn't `127.0.0.1` or `localhost` are refused, which blocks DNS-rebinding pages from reading the token. The server builds every prompt from its own copy of the spec and takes only your sentence edits, comment statuses, and replies from the browser. A Claude Code run that hits the 30-minute limit is stopped with its whole process group and reported as a failure. Ctrl-C or closing the terminal stops any running `claude` too. **Run with Claude Code** runs `claude -p --permission-mode acceptEdits` in your repo root, which lets Claude edit files without asking. Use `--dry-run`, or set `REDLINE_CLAUDE_FLAGS`, if you want something stricter. Review comments can be written by anyone who can comment on the PR, so the execution prompt fences them as quoted data and tells Claude never to act on instructions inside them.
+The local server binds to `127.0.0.1` and requires a per-launch token, which is injected into the page, on every `/api` call. Other sites open in your browser can't trigger a sync. Requests whose `Host` isn't `127.0.0.1` or `localhost` are refused, which blocks DNS-rebinding pages from reading the token. The server builds every prompt from its own copy of the spec and takes only your sentence edits, comment statuses, and replies from the browser. A Claude Code run that hits the 30-minute limit is stopped with its whole process group and reported as a failure. Ctrl-C or closing the terminal stops any running `claude` too. **Run with Claude Code** runs `claude -p --permission-mode acceptEdits` in your repo root, which lets Claude edit any file in the repo without asking (it is told to change only what your edited sentences require, but nothing enforces that). Like typing `claude` there yourself, a run loads the repo's own Claude Code settings, hooks, and MCP servers; only the spec writer runs without them. Use `--dry-run`, or set `REDLINE_CLAUDE_FLAGS`, if you want something stricter. Your code is sent to Anthropic through your Claude login, as with any Claude Code use: the diff, the files Claude chooses to read, and the review comments. Review comments can be written by anyone who can comment on the PR, so the execution prompt fences them as quoted data and tells Claude never to act on instructions inside them.
 
 ## Development
 
@@ -113,6 +114,8 @@ npm run typecheck      # tsc --noEmit over everything
 npm test               # builds, then unit + integration + browser tests
 npx tsx bin/cli.ts --demo
 ```
+
+Running from source (`npx tsx bin/cli.ts`) still serves the page from the built `dist/web`, so run `npm run build` after changing anything under `web/`, and restart redline after changing the server. Otherwise the page and the server can be different versions.
 
 `npm test` never calls the real `claude` or GitHub: integration tests put fake `claude` and `gh` binaries first on `PATH` and run the built CLI against throwaway repos, checking every byte of each repo (`.git` included) before and after. Browser tests drive headless Chrome and are skipped if Chrome or Chromium isn't installed (set `CHROME_PATH` to point at one).
 
