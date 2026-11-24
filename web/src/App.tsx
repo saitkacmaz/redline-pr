@@ -1,10 +1,10 @@
-import { useCallback, useEffect, useReducer, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useReducer, useRef, useState } from 'react';
 import type { Activity, LoadTarget, MarginComment, PostedReply, SessionInfo, SpecView, SyncResult } from '../../shared/types';
 import { api, subscribe } from './api';
-import { Margin } from './components/Margin';
-import { Section } from './components/Section';
+import { HiddenThreads, Margin } from './components/Margin';
+import { SpecBody } from './components/SpecBody';
 import { LogPeek, StatusLine } from './components/StatusLine';
-import { SyncSheet } from './components/SyncSheet';
+import { SyncView } from './components/SyncView';
 import { TopBar } from './components/TopBar';
 import { clearDraft, isEdited, reducer, restoreDraft, saveDraft } from './state';
 
@@ -42,12 +42,51 @@ function useActivity(onView: () => void): { activity: Activity | null; log: stri
   return { activity, log, connected };
 }
 
+type Route = 'spec' | 'sync';
+const routeOf = (): Route => (window.location.hash === '#sync' ? 'sync' : 'spec');
+
+/**
+ * Spec and Sync are two views in the browser's history (#sync), so Back and Forward
+ * move between them like pages, and the spec's scroll position comes back with it.
+ */
+function useRoute(): { route: Route; openSync: () => void; back: () => void } {
+  const [route, setRoute] = useState<Route>(routeOf);
+  const specScroll = useRef(0);
+
+  useEffect(() => {
+    // The browser would restore scroll on Back while the short Sync page is still showing; we do it instead.
+    window.history.scrollRestoration = 'manual';
+    const onPop = (): void => setRoute(routeOf());
+    window.addEventListener('popstate', onPop);
+    return () => window.removeEventListener('popstate', onPop);
+  }, []);
+
+  useLayoutEffect(() => {
+    window.scrollTo(0, route === 'spec' ? specScroll.current : 0);
+  }, [route]);
+
+  const openSync = useCallback(() => {
+    specScroll.current = window.scrollY;
+    window.history.pushState({ redline: 'sync' }, '', '#sync');
+    setRoute('sync');
+  }, []);
+  const back = useCallback(() => {
+    // Opened from the spec: step back in history. Landed on #sync directly: replace it.
+    if ((window.history.state as { redline?: string } | null)?.redline === 'sync') window.history.back();
+    else {
+      window.history.replaceState(null, '', window.location.pathname + window.location.search);
+      setRoute('spec');
+    }
+  }, []);
+  return { route, openSync, back };
+}
+
 export function App() {
   const [doc, dispatch] = useReducer(reducer, null);
   const [session, setSession] = useState<SessionInfo | null>(null);
   const [view, setView] = useState<SpecView | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const [syncing, setSyncing] = useState(false);
+  const { route, openSync, back } = useRoute();
   const [switcher, setSwitcher] = useState(false);
   const [result, setResult] = useState<SyncResult | null>(null);
   const [posted, setPosted] = useState<Record<string, PostedReply>>({});
@@ -78,9 +117,8 @@ export function App() {
         docId.current = null;
         dispatch({ type: 'load', doc: null });
         setResult(null);
-        setSyncing(false);
-        // Nothing to show on launch: offer the PRs. After the user picked something, don't pop it open again.
-        if (v.status === 'empty' && !everReady.current) setSwitcher(true);
+        // Nothing to show on launch: offer the PRs, if GitHub has any. After the user picked something, don't pop it open again.
+        if (v.status === 'empty' && v.offerPrs && !everReady.current) setSwitcher(true);
       }
     } catch (e) {
       if (mine === seq.current) setNotice(e instanceof Error ? e.message : String(e));
@@ -99,10 +137,13 @@ export function App() {
     (commentId: string, status: MarginComment['status']) => dispatch({ type: 'status', commentId, status }),
     [],
   );
-  const closeSync = useCallback(() => {
-    setSyncing(false);
-    requestAnimationFrame(() => syncButton.current?.focus());
-  }, []);
+  const backToSpec = back;
+  // However Sync was left (link, Esc, the browser's Back button), focus lands back on Sync.
+  const lastRoute = useRef(route);
+  useEffect(() => {
+    if (route === 'spec' && lastRoute.current === 'sync') syncButton.current?.focus();
+    lastRoute.current = route;
+  }, [route]);
   const onPosted = useCallback(
     (replies: PostedReply[]) => setPosted((prev) => ({ ...prev, ...Object.fromEntries(replies.map((r) => [r.commentId, r])) })),
     [],
@@ -114,10 +155,9 @@ export function App() {
   /** After a run: read the changed code again and start a fresh spec. The applied redlines are done with. */
   const reanalyze = useCallback(() => {
     if (doc) clearDraft(doc);
-    setSyncing(false);
+    backToSpec();
     load({ kind: 'current' });
-    requestAnimationFrame(() => syncButton.current?.focus());
-  }, [doc, load]);
+  }, [doc, load, backToSpec]);
 
   if (!session || !view) {
     return (
@@ -135,11 +175,13 @@ export function App() {
   const clauseIds = new Set(clauses.map((c) => c.id));
   const orphans = doc?.comments.filter((c) => !clauseIds.has(c.clauseId)) ?? [];
   const mode = session.demo ? 'demo' : session.dryRun ? 'dry run' : null;
+  // #sync shows the Sync view only once there's a spec to sync; otherwise the spec view explains why not.
+  const onSync = route === 'sync' && doc !== null && ready !== null;
 
   return (
     <>
-      {/* Everything behind the sheet is inert, so Tab and screen readers stay inside it. */}
-      <div inert={syncing}>
+      {/* The spec stays mounted while Sync is open, so open code peeks and expanded threads survive Back. */}
+      <div hidden={onSync}>
         <TopBar
           ref={syncButton}
           title={doc?.prTitle ?? (loading ? `Loading ${view.label}…` : session.branch || 'redline')}
@@ -154,7 +196,7 @@ export function App() {
           onSwitcherOpen={setSwitcher}
           onPick={load}
           onRefresh={() => load({ kind: 'current' })}
-          onSync={() => setSyncing(true)}
+          onSync={openSync}
         />
 
         <main className="mx-auto max-w-[1120px] px-6 pt-14 pb-40 lg:px-0">
@@ -181,7 +223,7 @@ export function App() {
               ) : view.status === 'empty' ? (
                 <>
                   <p className="text-[15px] leading-[1.6] text-ink">{view.message}</p>
-                  <p className="mt-1 text-[13px] text-muted">Pick a pull request from the title above, or make a change and Refresh.</p>
+                  <p className="mt-1 text-[13px] text-muted">{view.hint}</p>
                 </>
               ) : (
                 doc && (
@@ -198,16 +240,7 @@ export function App() {
           {doc && (
             // While a new spec loads, the old one stays visible for reference but can't be edited.
             <div inert={loading} className={`transition-opacity duration-300 ${loading ? 'opacity-40' : ''}`}>
-              {doc.sections.map((section) => (
-                <Section
-                  key={section.id}
-                  section={section}
-                  comments={doc.comments}
-                  dispatch={dispatch}
-                  onReply={onReply}
-                  onStatus={onStatus}
-                />
-              ))}
+              <SpecBody doc={doc} dispatch={dispatch} onReply={onReply} onStatus={onStatus} />
 
               {orphans.length > 0 && (
                 <section className={`${ROW} border-t border-rule pt-8`}>
@@ -217,13 +250,20 @@ export function App() {
                   </aside>
                 </section>
               )}
+
+              {(doc.hiddenThreads?.length ?? 0) > 0 && (
+                <div className={`${ROW} mt-10`}>
+                  <div />
+                  <HiddenThreads threads={doc.hiddenThreads ?? []} />
+                </div>
+              )}
             </div>
           )}
         </main>
       </div>
 
-      {syncing && doc && ready && (
-        <SyncSheet
+      {onSync && doc && ready && (
+        <SyncView
           doc={doc}
           session={session}
           canPostReplies={ready.canPostReplies}
@@ -236,7 +276,7 @@ export function App() {
           onPosted={onPosted}
           onReply={onReply}
           onReanalyze={reanalyze}
-          onClose={closeSync}
+          onBack={backToSpec}
         />
       )}
     </>

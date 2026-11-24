@@ -194,6 +194,15 @@ test('replies post only on request, only what the user wrote, and never twice', 
     assert.equal(view.canPostReplies, true);
     assert.equal(doc.comments[0]?.clauseId, 's1-c1');
 
+    // Review threads come from GraphQL: the open one is a single item with its reply; the rest are set aside.
+    assert.deepEqual(doc.comments.map((c) => c.id), ['rc-11']);
+    assert.deepEqual(doc.comments[0]?.replies, [{ author: 'me', body: 'Will do.' }]);
+    assert.equal(doc.comments[0]?.replied, true);
+    assert.deepEqual(doc.hiddenThreads?.map((h) => h.reason), ['resolved', 'outdated']);
+    const specInput = readCalls(join(binDir, 'calls.jsonl'))[0]!.input;
+    assert.match(specInput, /Please rethrow instead\.\n\n@me: Will do\./, 'Claude sees the whole open thread');
+    assert.doesNotMatch(specInput, /RESOLVED-NIT|OUTDATED-CONCERN/, 'and never the resolved or outdated ones');
+
     // Editing a sentence and running drafts and posts nothing.
     doc.sections[0]!.clauses[0]!.currentText = 'If adding throws, `add` rethrows the error.';
     await api<SyncResult>(r, '/api/sync', { doc, mode: 'run' });
@@ -414,6 +423,79 @@ test('no PR and no local changes: the page still boots, says so, and lists PRs t
     await r.stop();
   }
   assert.deepEqual(changedPaths(before, snapshot(repo)), []);
+});
+
+test('a repo on GitLab reviews its local diff: no PRs, no comments, no error, and an explicit PR says why', async () => {
+  const repo = makeRepo();
+  git(repo, 'remote', 'set-url', 'origin', 'git@gitlab.com:acme/app.git');
+  const { binDir } = fakeClaude(SPEC);
+  // gh is logged in to github.com, but this remote isn't a GitHub host: what real gh prints.
+  writeFileSync(
+    join(binDir, 'gh'),
+    '#!/bin/sh\n[ "$1" = auth ] && exit 0\necho "none of the git remotes configured for this repository point to a known GitHub host." >&2\nexit 1\n',
+  );
+  chmodSync(join(binDir, 'gh'), 0o755);
+  const env = { XDG_CACHE_HOME: tempDir('cache'), PATH: `${binDir}:${process.env.PATH ?? ''}` };
+  const before = snapshot(repo);
+  const r = await boot([], { cwd: repo, env });
+  try {
+    const { doc, view } = await ready(r);
+    assert.equal(doc.prNumber, undefined);
+    assert.equal(doc.baseBranch, 'main');
+    assert.deepEqual(doc.comments, []);
+    assert.equal(view.canPostReplies, false);
+    assert.equal(view.runBlocked, undefined, 'the local diff can be synced');
+    const prs = await api<PrListResponse>(r, '/api/prs');
+    assert.deepEqual(prs.prs, []);
+    assert.deepEqual(prs.current, { kind: 'local' });
+    assert.equal(prs.note, 'This repository’s remotes aren’t on GitHub, so there are no pull requests here.');
+
+    await api(r, '/api/load', { target: { kind: 'pr', number: 5 } });
+    const failed = await settled(r);
+    assert.equal(failed.view.status, 'error');
+    assert.match(failed.view.status === 'error' ? failed.view.message : '', /^Can’t load PR #5\. This repository’s remotes aren’t on GitHub.*pick it from the title above\.$/);
+  } finally {
+    await r.stop();
+  }
+  assert.deepEqual(changedPaths(before, snapshot(repo)), []);
+});
+
+test('a local-only repo with no remote and no default branch name still boots and explains the next step', async () => {
+  const repo = tempDir('trunk');
+  git(repo, 'init', '-q', '-b', 'trunk');
+  writeFileSync(join(repo, 'a.js'), 'a\n');
+  git(repo, 'add', '-A');
+  git(repo, 'commit', '-qm', 'base');
+  git(repo, 'checkout', '-qb', 'feat');
+  writeFileSync(join(repo, 'a.js'), 'b\n');
+  git(repo, 'commit', '-qam', 'change');
+  const { binDir, logFile } = fakeClaude(SPEC);
+  const ghLog = join(binDir, 'gh-calls');
+  writeFileSync(join(binDir, 'gh'), `#!/bin/sh\necho "$*" >> ${JSON.stringify(ghLog)}\nexit 0\n`);
+  chmodSync(join(binDir, 'gh'), 0o755);
+  const env = { XDG_CACHE_HOME: tempDir('cache'), PATH: `${binDir}:${process.env.PATH ?? ''}` };
+
+  const r = await boot([], { cwd: repo, env });
+  try {
+    const { view } = await settled(r);
+    assert.deepEqual(view, {
+      status: 'empty',
+      message: 'No branch to compare against: redline looked for origin/HEAD, main, master and develop.',
+      hint: 'Run `redline --base <branch>` with the branch this work started from.',
+      offerPrs: false,
+    });
+    assert.equal((await api<PrListResponse>(r, '/api/prs')).note, 'This repository has no remote, so there are no pull requests here.');
+  } finally {
+    await r.stop();
+  }
+  const based = await boot(['--base', 'trunk'], { cwd: repo, env });
+  try {
+    assert.equal((await ready(based)).doc.baseBranch, 'trunk');
+  } finally {
+    await based.stop();
+  }
+  assert.equal(existsSync(ghLog), false, 'no remote: gh is never run');
+  assert.equal(readCalls(logFile).length, 1);
 });
 
 test('/api/events streams the real steps of a load and a run', async () => {

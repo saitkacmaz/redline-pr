@@ -1,5 +1,6 @@
 import { join } from 'node:path';
 import type {
+  HiddenThread,
   LoadTarget,
   MarginComment,
   PostedReply,
@@ -14,13 +15,16 @@ import type {
 import type { ActivityBus, Tracker } from './activity.js';
 import { demoDocument } from './demo.js';
 import { parseUnifiedDiff } from './diff.js';
-import { currentBranch, diffAgainst, hasCommit, headCommit, isAncestor, isExcludedPath, resolveBaseRef } from './git.js';
+import { currentBranch, diffAgainst, hasCommit, headCommit, isAncestor, isExcludedPath, NoBaseBranchError, resolveBaseRef } from './git.js';
 import {
   fetchComments,
   findPullRequest,
-  ghAvailable,
+  githubAccess,
   listPullRequests,
+  NOT_GITHUB_ACCESS,
+  NotOnGitHubError,
   pullRequestDiff,
+  type GitHubAccess,
   type PullRequest,
 } from './github.js';
 import { generateSpec, modelLabel } from './spec.js';
@@ -36,6 +40,13 @@ export interface WorkspaceOptions {
   demo: boolean;
   dryRun: boolean;
   bus: ActivityBus;
+}
+
+/** Nothing to review, and what to do about it. */
+interface Empty {
+  empty: string;
+  hint: string;
+  github: GitHubAccess;
 }
 
 interface Loaded {
@@ -110,7 +121,7 @@ export class Workspace {
       if (ctl.signal.aborted) return;
       if ('empty' in loaded) {
         this.loaded = null;
-        this.view = { status: 'empty', message: loaded.empty };
+        this.view = { status: 'empty', message: loaded.empty, hint: loaded.hint, offerPrs: loaded.github.ok };
         track.done('Nothing to review');
         return;
       }
@@ -151,14 +162,38 @@ export class Workspace {
     return (await isAncestor(root, pr.headRefOid, 'HEAD')) && !(await isAncestor(root, pr.headRefOid, baseRef));
   }
 
-  private async resolve(target: LoadTarget, track: Tracker, signal: AbortSignal): Promise<Loaded | { empty: string }> {
+  private async resolve(target: LoadTarget, track: Tracker, signal: AbortSignal): Promise<Loaded | Empty> {
     const root = this.opts.root;
+    let github = await githubAccess(root);
+    if (!(await hasCommit(root, 'HEAD'))) {
+      this.branch = '';
+      return { empty: 'This repository has no commits yet.', hint: 'Commit some work on a branch, then Refresh.', github };
+    }
     this.branch = await currentBranch(root);
-    const hasGh = await ghAvailable(root);
-    if (target.kind === 'pr' && !hasGh) throw new Error('Loading a PR needs the GitHub CLI. Install gh and run `gh auth login`.');
-    const pr =
-      target.kind === 'pr' ? await findPullRequest(root, target.number) : target.kind === 'auto' && hasGh ? await findPullRequest(root) : null;
-    const baseRef = await resolveBaseRef(root, this.opts.base ?? pr?.baseRefName, this.branch);
+    if (target.kind === 'pr' && !github.ok) {
+      throw new Error(`Can’t load PR #${target.number}. ${github.note} The local branch diff works: pick it from the title above.`);
+    }
+
+    // Without GitHub this is simply a local review: no PR, no comments, no error.
+    let pr: PullRequest | null = null;
+    if (github.ok && target.kind !== 'local') {
+      try {
+        pr = await findPullRequest(root, target.kind === 'pr' ? target.number : undefined);
+      } catch (err) {
+        if (!(err instanceof NotOnGitHubError)) throw err;
+        if (target.kind === 'pr') throw new Error(`Can’t load PR #${target.number}. ${err.message} The local branch diff works: pick it from the title above.`);
+        github = NOT_GITHUB_ACCESS;
+      }
+    }
+    const hasGh = github.ok;
+
+    let baseRef: { name: string; ref: string };
+    try {
+      baseRef = await resolveBaseRef(root, this.opts.base ?? pr?.baseRefName, this.branch);
+    } catch (err) {
+      if (!(err instanceof NoBaseBranchError)) throw err;
+      return { empty: err.message, hint: 'Run `redline --base <branch>` with the branch this work started from.', github };
+    }
     const checkedOut = pr ? await this.sameWork(pr, baseRef.ref) : true;
 
     let rawDiff: string;
@@ -172,14 +207,23 @@ export class Workspace {
     const files = parseUnifiedDiff(rawDiff).filter((f) => !isExcludedPath(f.path));
     if (files.length === 0) {
       if (pr) throw new Error(`PR #${pr.number} has no reviewable changes.`);
-      return { empty: `No changes on ${this.branch} against ${baseRef.name}.` };
+      return {
+        empty: `No changes on ${this.branch} against ${baseRef.name}.`,
+        hint: github.ok ? 'Pick a pull request from the title above, or make a change and Refresh.' : 'Make a change and Refresh.',
+        github,
+      };
     }
 
     let comments: MarginComment[] = [];
+    let hiddenThreads: HiddenThread[] = [];
     if (pr) {
       track.phase(`Fetching comments on PR #${pr.number}`);
       try {
-        comments = await fetchComments(root, pr.number);
+        const fetched = await fetchComments(root, pr.number);
+        comments = fetched.comments;
+        hiddenThreads = fetched.hidden;
+        if (fetched.warning) track.log(fetched.warning);
+        if (hiddenThreads.length > 0) track.log(`Set aside ${hiddenThreads.length} resolved or outdated thread${hiddenThreads.length === 1 ? '' : 's'}`);
       } catch (err) {
         track.log(`Could not load comments, continuing without them: ${firstLine(err)}`);
       }
@@ -210,7 +254,7 @@ export class Workspace {
         signal,
       },
     );
-    return { doc, pr, checkedOut, hasGh };
+    return { doc: hiddenThreads.length > 0 ? { ...doc, hiddenThreads } : doc, pr, checkedOut, hasGh };
   }
 
   async pullRequests(): Promise<PrListResponse> {
@@ -219,9 +263,8 @@ export class Workspace {
       return { prs: [], branch: this.branch, current: null, note: 'The demo has one PR. Run redline in a repository to switch between PRs.' };
     }
     const root = this.opts.root;
-    if (!(await ghAvailable(root))) {
-      return { prs: [], branch: this.branch, current, note: 'Install gh and run `gh auth login` to list pull requests.' };
-    }
+    const github = await githubAccess(root);
+    if (!github.ok) return { prs: [], branch: this.branch, current, note: github.note };
     try {
       const [list, head] = await Promise.all([listPullRequests(root), headCommit(root).catch(() => '')]);
       return {
@@ -237,7 +280,8 @@ export class Workspace {
         ...(list.length === 0 ? { note: 'No open pull requests in this repository.' } : {}),
       };
     } catch (err) {
-      return { prs: [], branch: this.branch, current, note: `gh could not list pull requests: ${firstLine(err)}` };
+      const note = err instanceof NotOnGitHubError ? err.message : `Couldn’t list pull requests from GitHub (${firstLine(err)}). The local branch diff still works.`;
+      return { prs: [], branch: this.branch, current, note };
     }
   }
 

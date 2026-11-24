@@ -59,6 +59,7 @@ export const api = {
 export function subscribe(onEvent: (event: ServerEvent) => void, onConnection: (connected: boolean) => void): () => void {
   let stopped = false;
   let ctl: AbortController | null = null;
+  let retryMs = 1000;
 
   const connect = async (): Promise<void> => {
     while (!stopped) {
@@ -67,6 +68,7 @@ export function subscribe(onEvent: (event: ServerEvent) => void, onConnection: (
         const res = await fetch('/api/events', { headers: { 'x-redline-token': sessionToken() }, signal: ctl.signal });
         if (!res.ok || !res.body) throw new Error(String(res.status));
         onConnection(true);
+        retryMs = 1000;
         const reader = res.body.pipeThrough(new TextDecoderStream()).getReader();
         let buffer = '';
         for (;;) {
@@ -90,7 +92,9 @@ export function subscribe(onEvent: (event: ServerEvent) => void, onConnection: (
       }
       if (stopped) return;
       onConnection(false);
-      await new Promise((r) => setTimeout(r, 1000));
+      // Back off while redline is gone (1s, 2s, 4s… up to 10s), so a closed server isn't hammered.
+      await new Promise((r) => setTimeout(r, retryMs));
+      retryMs = Math.min(retryMs * 2, 10_000);
     }
   };
   void connect();

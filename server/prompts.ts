@@ -47,7 +47,8 @@ Describe what the code DOES, including bugs. Do not describe intent, and do not 
 - One sentence per clause, 12-35 words. Present tense. Active voice. No hedging words ("seems", "may", "appears").
 - Use code identifiers in backticks only when a name is the clearest way to refer to something.
 - Group clauses into 2-6 sections named after behavior, not files (e.g. "File Ingestion Flow", "Job Claiming", "Failure Reporting").
-- Aim for 8-25 clauses total. Fewer, sharper clauses beat exhaustive narration. Skip pure formatting, imports, renames, and comment changes.
+- Aim for 8-25 clauses total, however large the diff. Fewer, sharper clauses beat exhaustive narration. Skip pure formatting, imports, renames, and comment changes.
+- On a large diff, group closely related changes into one clause (e.g. "All five handlers now validate the tenant id before querying" rather than five clauses). Never write near-duplicate clauses that differ only by file or function name.
 
 ## Anchors
 
@@ -64,6 +65,11 @@ Give each clause an id of the form "s<section>-c<clause>" starting at 1 (e.g. "s
 ## Comment mapping
 
 You will receive the PR's review comments. Map EVERY comment to exactly one clause id: the clause whose behavior the comment is about. Use the comment's file/line when present, otherwise its meaning. If a comment is general, map it to the clause it is most relevant to. Never leave a comment unmapped and never invent comment ids.`;
+
+/** A thread as one piece of text: the opening comment, then each reply with its author. */
+export function threadText(c: Pick<MarginComment, 'body' | 'replies'>): string {
+  return [c.body, ...(c.replies ?? []).map((r) => `@${r.author}: ${r.body}`)].join('\n\n');
+}
 
 export interface SpecPromptInput {
   prTitle: string;
@@ -82,7 +88,7 @@ export function buildSpecUserPrompt(input: SpecPromptInput): string {
       : input.comments
           .map((c) => {
             const where = c.file ? ` on ${c.file}${c.line ? `:${c.line}` : ''}` : '';
-            return `<comment id="${c.id}" author="${c.author}"${where ? ` location="${where.trim().slice(3)}"` : ''}>\n${c.body}\n</comment>`;
+            return `<comment id="${c.id}" author="${c.author}"${where ? ` location="${where.trim().slice(3)}"` : ''}>\n${threadText(c)}\n</comment>`;
           })
           .join('\n');
 
@@ -118,8 +124,8 @@ export interface SyncPromptInput {
  * Review comments are written by anyone who can comment on the PR, and this prompt
  * drives an agent that edits files. Fence them as quoted data, never instructions.
  */
-function fence(c: { author: string; body: string }): string {
-  const body = c.body.replace(/<\/?reviewer_comment[^>]*>/gi, '').trim();
+function fence(c: Pick<MarginComment, 'author' | 'body' | 'replies'>): string {
+  const body = threadText(c).replace(/<\/?reviewer_comment[^>]*>/gi, '').trim();
   return `<reviewer_comment author="${c.author.replace(/"/g, '')}">\n${body}\n</reviewer_comment>`;
 }
 

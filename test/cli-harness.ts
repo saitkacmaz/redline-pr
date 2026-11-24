@@ -136,6 +136,19 @@ export function fakeGhWithPr(
   const pr7 = { number: 7, title: 'Make add safe', headRefName: opts.headRefName ?? 'feat', baseRefName: 'main', ...(opts.headRefOid ? { headRefOid: opts.headRefOid } : {}) };
   const pr8 = { number: 8, title: 'Tidy util', headRefName: 'other', baseRefName: 'main' };
   const list = [{ ...pr7, author: { login: 'ana' } }, { ...pr8, author: { login: 'bo' } }];
+  const c = (id: number, login: string, body: string) => ({ databaseId: id, author: { login, __typename: 'User' }, body, createdAt: '2026-11-20T10:00:00Z' });
+  const t = (id: number, resolved: boolean, outdated: boolean, messages: ReturnType<typeof c>[]) => ({
+    id: `T${id}`, isResolved: resolved, isOutdated: outdated, path: 'src/app.js', line: outdated ? null : 4, originalLine: 4, diffSide: 'RIGHT',
+    opening: { nodes: messages.slice(0, 1) }, recent: { totalCount: messages.length, nodes: messages },
+  });
+  // One open thread the PR author ("me") answered last, one resolved, one outdated.
+  const threads = {
+    data: { repository: { pullRequest: { author: { login: 'me' }, reviewThreads: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [
+      t(11, false, false, [c(11, 'rev', 'Please rethrow instead.'), c(21, 'me', 'Will do.')]),
+      t(12, true, false, [c(12, 'rev', 'RESOLVED-NIT: rename this.')]),
+      t(13, false, true, [c(13, 'rev', 'OUTDATED-CONCERN: old line.')]),
+    ] } } } },
+  };
   const diff8 = 'diff --git a/src/util.js b/src/util.js\nindex 1..2 100644\n--- a/src/util.js\n+++ b/src/util.js\n@@ -1 +1,2 @@\n export const id = (x) => x;\n+export const two = 2;\n';
   const script = `#!/usr/bin/env node
 const fs = require('node:fs');
@@ -154,6 +167,10 @@ if (a[0] === 'pr' && a[1] === 'list') {
 }
 if (a[0] === 'pr' && a[1] === 'diff') {
   process.stdout.write(${JSON.stringify(diff8)});
+  process.exit(0);
+}
+if (a[0] === 'api' && a[1] === 'graphql') {
+  process.stdout.write(${JSON.stringify(JSON.stringify(threads))});
   process.exit(0);
 }
 if (a[0] === 'api' && a.includes('POST')) {

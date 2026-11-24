@@ -5,15 +5,37 @@ export interface CodeAnchor {
   hunk: string; // raw unified diff hunk for inline peek
 }
 
+export interface ThreadReply {
+  author: string;
+  body: string;
+}
+
+/** An open review thread (or a PR-level comment): the opening comment plus its replies. */
 export interface MarginComment {
   id: string;
   author: string;
   body: string;
   file?: string;
   line?: number;
+  /** Later messages in the same thread, oldest first. */
+  replies?: ThreadReply[];
+  /** Replies GitHub has but that weren't fetched (very long threads). */
+  omittedReplies?: number;
+  /** The PR author wrote the last message: the thread is waiting on the reviewer. */
+  replied?: boolean;
   clauseId: string; // maps to SpecClause.id
   replyDraft?: string;
   status: 'open' | 'resolved' | 'pushed_back';
+}
+
+/** A review thread left out of the margin and the prompt because GitHub marks it resolved or outdated. */
+export interface HiddenThread {
+  id: string;
+  author: string;
+  body: string;
+  file?: string;
+  reason: 'resolved' | 'outdated';
+  replyCount: number;
 }
 
 export interface SpecClause {
@@ -39,6 +61,8 @@ export interface SpecDocument {
   baseBranch: string;
   sections: SpecSection[];
   comments: MarginComment[];
+  /** Resolved and outdated threads: counted and inspectable, never in the margin or the prompt. */
+  hiddenThreads?: HiddenThread[];
 }
 
 /* ---- API contract (server <-> web) ---- */
@@ -67,7 +91,14 @@ export type SpecView =
       /** The last Run for this spec. After a real, successful one the spec is stale until re-analyzed. */
       result?: SyncResult;
     }
-  | { status: 'empty'; message: string }
+  | {
+      status: 'empty';
+      message: string;
+      /** What to do next, in one sentence. */
+      hint: string;
+      /** GitHub works here, so the PR list is worth offering. */
+      offerPrs: boolean;
+    }
   | { status: 'error'; message: string };
 
 export interface SpecResponse {

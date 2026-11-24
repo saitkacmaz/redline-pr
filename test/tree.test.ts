@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { rmSync } from 'node:fs';
 import { join } from 'node:path';
-import { changesBetween, resolveBaseRef, treeState } from '../server/git.js';
+import { changesBetween, NoBaseBranchError, resolveBaseRef, treeState } from '../server/git.js';
 import { changedPaths, git, makeRepo, snapshot, tempDir, write } from './helpers.js';
 
 test('a run is reported relative to what was on disk before it, not to HEAD', async () => {
@@ -62,4 +62,49 @@ test('the auto-detected base is never the branch being reviewed', async () => {
   git(repo, 'symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/feat');
   assert.deepEqual(await resolveBaseRef(repo, undefined, 'feat'), { name: 'main', ref: 'origin/main' });
   assert.deepEqual(await resolveBaseRef(repo, 'feat', 'feat'), { name: 'feat', ref: 'origin/feat' }, 'an explicit --base is taken as given');
+});
+
+/** A repo with no remote whose default branch is `name`, and a `feat` branch off it. */
+function localRepo(name: string): string {
+  const dir = tempDir('local');
+  git(dir, 'init', '-q', '-b', name);
+  write(dir, 'a.js', 'a\n');
+  git(dir, 'add', '-A');
+  git(dir, 'commit', '-qm', 'base');
+  git(dir, 'checkout', '-qb', 'feat');
+  return dir;
+}
+
+test('without a remote, the base is the local main, then master, then develop', async () => {
+  assert.deepEqual(await resolveBaseRef(localRepo('main'), undefined, 'feat'), { name: 'main', ref: 'main' });
+  assert.deepEqual(await resolveBaseRef(localRepo('master'), undefined, 'feat'), { name: 'master', ref: 'master' });
+  assert.deepEqual(await resolveBaseRef(localRepo('develop'), undefined, 'feat'), { name: 'develop', ref: 'develop' });
+  const both = localRepo('master');
+  git(both, 'branch', 'main', 'master');
+  assert.deepEqual(await resolveBaseRef(both, undefined, 'feat'), { name: 'main', ref: 'main' }, 'main before master');
+});
+
+test('origin/HEAD wins over a local main, whatever the default branch is called', async () => {
+  const repo = localRepo('main');
+  git(repo, 'branch', 'develop', 'main');
+  git(repo, 'update-ref', 'refs/remotes/origin/develop', 'develop');
+  git(repo, 'symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/develop');
+  assert.deepEqual(await resolveBaseRef(repo, undefined, 'feat'), { name: 'develop', ref: 'origin/develop' });
+  assert.deepEqual(await resolveBaseRef(repo, 'main', 'feat'), { name: 'main', ref: 'main' }, '--base comes first');
+});
+
+test('no default branch at all is a NoBaseBranchError; a missing --base is a plain error that names it', async () => {
+  const repo = localRepo('trunk');
+  await assert.rejects(resolveBaseRef(repo, undefined, 'feat'), NoBaseBranchError);
+  await assert.rejects(resolveBaseRef(repo, 'release', 'feat'), (err: Error) => !(err instanceof NoBaseBranchError) && /"release" not found/.test(err.message));
+});
+
+test('generated files are left out of a large PR before Claude sees it', async () => {
+  const { isExcludedPath } = await import('../server/git.js');
+  for (const path of ['web/package-lock.json', 'Cargo.lock', 'api/user.pb.go', 'proto/user_pb2.py', 'lib/model.g.dart', 'src/__snapshots__/App.test.tsx.snap', 'src/__generated__/schema.ts', 'dist/app.min.js']) {
+    assert.equal(isExcludedPath(path), true, path);
+  }
+  for (const path of ['src/lock.ts', 'src/snapshots/view.ts', 'server/generated_report.py', 'go.mod']) {
+    assert.equal(isExcludedPath(path), false, path);
+  }
 });

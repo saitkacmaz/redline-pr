@@ -14,6 +14,9 @@ const MarginCommentSchema = z.object({
   body: z.string(),
   file: z.string().optional(),
   line: z.number().optional(),
+  replies: z.array(z.object({ author: z.string(), body: z.string() })).optional(),
+  omittedReplies: z.number().optional(),
+  replied: z.boolean().optional(),
   clauseId: z.string(),
   replyDraft: z.string().optional(),
   status: z.enum(['open', 'resolved', 'pushed_back']),
@@ -41,6 +44,18 @@ const SpecDocumentSchema: z.ZodType<SpecDocument> = z.object({
     }),
   ),
   comments: z.array(MarginCommentSchema),
+  hiddenThreads: z
+    .array(
+      z.object({
+        id: z.string(),
+        author: z.string(),
+        body: z.string(),
+        file: z.string().optional(),
+        reason: z.enum(['resolved', 'outdated']),
+        replyCount: z.number(),
+      }),
+    )
+    .optional(),
 });
 
 export const SyncRequestSchema: z.ZodType<SyncRequest> = z.object({

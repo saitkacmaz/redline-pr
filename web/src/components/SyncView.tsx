@@ -22,7 +22,8 @@ interface Props {
   onPosted: (replies: PostedReply[]) => void;
   onReply: (commentId: string, text: string) => void;
   onReanalyze: () => void;
-  onClose: () => void;
+  /** Back to the spec (browser history back). */
+  onBack: () => void;
 }
 
 function Label({ children }: { children: ReactNode }) {
@@ -67,8 +68,12 @@ const PRIMARY =
 const SECONDARY =
   'h-9 cursor-pointer rounded-[3px] border border-rule px-4 text-[13.5px] text-ink hover:border-ink/40 disabled:cursor-default disabled:opacity-35';
 
-export function SyncSheet(props: Props) {
-  const { doc, session, canPostReplies, runBlocked, result, onResult, activity, log, posted, onPosted, onReply, onReanalyze, onClose } = props;
+/**
+ * The Sync page: a view of its own at #sync, so the browser's Back button (or Esc, or
+ * "Back to spec") returns to the spec with every edit and reply intact.
+ */
+export function SyncView(props: Props) {
+  const { doc, session, canPostReplies, runBlocked, result, onResult, activity, log, posted, onPosted, onReply, onReanalyze, onBack } = props;
   const [plan, setPlan] = useState<SyncPlan | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<SyncMode | 'post' | null>(null);
@@ -101,17 +106,17 @@ export function SyncSheet(props: Props) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
       if (e.key !== 'Escape' || busy || running) return;
-      // Escape inside a reply leaves the field; a second Escape closes the sheet.
+      // Escape inside a reply leaves the field; a second Escape goes back to the spec.
       const target = e.target as HTMLElement | null;
       if (target?.tagName === 'TEXTAREA') {
         target.blur();
         return;
       }
-      onClose();
+      onBack();
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [busy, running, onClose]);
+  }, [busy, running, onBack]);
 
   const attempt = async (what: SyncMode | 'post', fn: () => Promise<void>): Promise<void> => {
     setBusy(what);
@@ -156,26 +161,26 @@ export function SyncSheet(props: Props) {
       : 'No pull request is linked to this branch, so replies can’t be posted.';
 
   return (
-    <div className="fixed inset-0 z-20 overflow-y-auto bg-paper" role="dialog" aria-modal="true" aria-labelledby="sync-title">
-      <div className="sticky top-0 z-10 border-b border-rule bg-paper">
-        <div className="mx-auto flex h-12 max-w-[760px] items-center px-6">
+    <div data-view="sync" aria-labelledby="sync-title">
+      <header className="sticky top-0 z-10 border-b border-rule bg-paper">
+        <div className="mx-auto flex h-12 max-w-[760px] items-center gap-4 px-6">
+          <button
+            type="button"
+            onClick={onBack}
+            disabled={busy !== null || running}
+            className="cursor-pointer text-[13px] text-muted hover:text-ink disabled:cursor-default disabled:opacity-40"
+          >
+            ← Back to spec
+          </button>
           <h1 id="sync-title" ref={heading} tabIndex={-1} className="text-[14px] font-medium outline-none">
             Sync review
           </h1>
-          <span className="ml-3 font-mono text-[12px] text-muted">{doc.branch}</span>
-          <button
-            type="button"
-            onClick={onClose}
-            disabled={busy !== null || running}
-            className="ml-auto cursor-pointer text-[13px] text-muted hover:text-ink disabled:cursor-default disabled:opacity-40"
-          >
-            Close <span className="text-muted">esc</span>
-          </button>
+          <span className="font-mono text-[12px] text-muted">{doc.branch}</span>
         </div>
         <Hairline activity={syncActivity} />
-      </div>
+      </header>
 
-      <div className="mx-auto max-w-[760px] px-6 pt-12 pb-32">
+      <main className="mx-auto max-w-[760px] px-6 pt-12 pb-32">
         {!plan && !error && <p className="text-[15px] text-muted">Preparing…</p>}
         {error && (
           <p role="alert" className="mb-8 text-[15px] text-del">
@@ -367,7 +372,7 @@ export function SyncSheet(props: Props) {
             )}
           </>
         )}
-      </div>
+      </main>
     </div>
   );
 }

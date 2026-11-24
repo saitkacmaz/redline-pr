@@ -8,7 +8,7 @@ import type { MarginComment, SpecDocument, SpecSection } from '../shared/types.j
 import { findFile, hunkFor, numberedDiff, type ParsedFile } from './diff.js';
 import { claudeStream, type ClaudeResult, type StreamHandlers } from './claude-stream.js';
 import { run } from './exec.js';
-import { SPEC_SYSTEM_PROMPT, buildSpecUserPrompt } from './prompts.js';
+import { SPEC_SYSTEM_PROMPT, buildSpecUserPrompt, threadText } from './prompts.js';
 
 /** Optional model override passed to `claude --model`; unset means the CLI's own default. */
 export function resolveModel(): string | undefined {
@@ -293,7 +293,7 @@ export async function generateSpec(input: SpecInput, hooks: SpecHooks = {}): Pro
     .update(SPEC_SYSTEM_PROMPT)
     .update(input.contextNote ?? '')
     .update(input.rawDiff)
-    .update(JSON.stringify(input.comments.map((c) => [c.id, c.body])))
+    .update(JSON.stringify(input.comments.map((c) => [c.id, threadText(c)])))
     .digest('hex')
     .slice(0, 16);
   const cacheFile = join(input.cacheDir, `spec-${key}.json`);

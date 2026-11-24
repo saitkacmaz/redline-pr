@@ -29,10 +29,14 @@ export function write(root: string, path: string, contents: string): void {
   writeFileSync(join(root, path), contents);
 }
 
-/** A repo with `main` and a checked-out `feat` branch that changes src/app.js (src/util.js is untouched). */
+/**
+ * A repo with `main` and a checked-out `feat` branch that changes src/app.js (src/util.js is untouched).
+ * Its origin names a GitHub repo, never fetched, so a fake `gh` has something to answer for.
+ */
 export function makeRepo(): string {
   const dir = tempDir('repo');
   git(dir, 'init', '-q', '-b', 'main');
+  git(dir, 'remote', 'add', 'origin', 'https://github.com/acme/app.git');
   write(dir, 'src/app.js', 'export function add(a, b) {\n  return a + b;\n}\n');
   write(dir, 'src/util.js', 'export const id = (x) => x;\n');
   git(dir, 'add', '-A');

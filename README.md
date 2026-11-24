@@ -9,7 +9,7 @@ Edit the sentences to say what the code *should* do. Hit **Sync** and Claude Cod
 `redline-pr` is for engineers who ship code written with AI coding agents. Instead of reading a raw diff and hand-prompting the agent once per review comment, you:
 
 1. **Read.** The diff against your base branch becomes a list of concrete, falsifiable statements ("If the S3 read raises, the handler logs and still returns 200 OK"). Every sentence links to the exact lines it describes.
-2. **Review.** GitHub review comments sit in the right margin, next to the sentence they're about.
+2. **Review.** Open GitHub review threads sit in the right margin, next to the sentence they're about. Resolved and outdated threads are set aside.
 3. **Redline.** Click a sentence and rewrite it. Or reply in the margin and push back.
 4. **Sync.** `redline-pr` computes a surgical `spec.diff` (only the sentences you changed, plus their code anchors), pipes a strict prompt to `claude -p`, and shows you exactly what Claude changed. Your margin replies post to GitHub only when you click **Post replies**.
 
@@ -44,6 +44,8 @@ The page opens right away and loads in place. While a spec is being written or C
 - **Refresh** re-reads the current diff and comments without restarting. Unsaved redlines are kept.
 - **Re-analyze diff** appears when a run finishes ("Synced — 2 files modified in 18s", with the files and the diff). It writes a fresh spec of the changed code and clears the redlines that were just applied, so you can check Claude's work and keep going.
 - With no PR and no local changes, the page says so and opens the PR list instead of exiting.
+- **Sync** is a page of its own (`#sync`). The browser's Back button, Esc, or **← Back to spec** returns to the spec where you left it, edits and scroll position intact.
+- **The margin** holds only open review threads, one item per thread: the opening comment and the latest reply, with a toggle to read the whole thread in place. A thread you answered last is marked *replied* (it's waiting on the reviewer). Resolved and outdated threads are left out of the margin and out of Claude's prompt; a single muted line at the bottom (`2 resolved/outdated hidden`) shows them if you want to look. Notes sit level with their sentence and cascade below each other when they run long; they never push the sentences apart. Hovering a note marks its sentence, and the other way round.
 
 | Flag | Meaning |
 | --- | --- |
@@ -58,7 +60,7 @@ The page opens right away and loads in place. While a spec is being written or C
 
 - Node 20+ and `git`.
 - [Claude Code](https://claude.com/claude-code): `claude` on `PATH`, logged in. It writes the spec and applies your edits on **Run with Claude Code**. No `ANTHROPIC_API_KEY` is needed.
-- Optional: [`gh`](https://cli.github.com), authenticated, to load review comments and post replies.
+- Optional: [`gh`](https://cli.github.com), authenticated, to list PRs, load review comments, and post replies. Without it, or in a repo with no remote or one hosted outside GitHub (GitLab, Bitbucket, your own server), redline reviews the local branch diff as usual. The PR list then says in one line why it's empty, and `gh` isn't run at all when there's no remote.
 
 ### Environment
 
@@ -70,7 +72,7 @@ The page opens right away and loads in place. While a spec is being written or C
 
 ## How it works
 
-**The diff.** `git diff-index -p <merge-base>` against the base branch, covering committed, staged, and unstaged changes to tracked files. Untracked files aren't included, so `git add` new files first. Lockfiles, source maps, minified files, snapshots, and anything your `.gitattributes` marks `linguist-generated` or `linguist-vendored` are excluded. Diffs too large to read in one pass (about 150k tokens) fail fast and list the largest files.
+**The diff.** `git diff-index -p <merge-base>` against the base branch, covering committed, staged, and unstaged changes to tracked files. Untracked files aren't included, so `git add` new files first. Lockfiles, source maps, minified files, snapshots (`*.snap`, `__snapshots__/`), generated protobuf and Dart code, `__generated__/` directories, and anything your `.gitattributes` marks `linguist-generated` or `linguist-vendored` are excluded. Diffs too large to read in one pass (about 150k tokens) fail fast and list the largest files.
 
 **The spec.** The diff, with explicit new-side line numbers, and every review comment are piped over stdin to `claude -p --output-format stream-json --verbose --json-schema <schema>`, with read-only access to the repository (`--add-dir`, tools `Read`, `Grep`, `Glob`). It starts in an empty temp directory rather than the repo, because Claude Code runs `git status` in its working directory on startup, and that can write `.git/index`. Claude decides what context beyond the diff is worth reading: the code the diff calls, its callers and tests, and whatever docs or contributor and agent instructions the project keeps. It has no shell (even `git status` rewrites `.git/index`) and no tools that write. None of the repo's own Claude Code configuration is loaded (`--setting-sources ""`, hooks disabled, no MCP servers, no skills), because hooks can run commands. Session persistence is off. The default Claude Code system prompt is replaced by the spec prompt. Tool calls stream to the page as steps. The schema-validated result is read from the final event's `structured_output`, falling back to parsing `result`. It contains sections, clauses, line anchors, an optional `riskFlag`, and a mapping from each comment to a clause. The system prompt in [`server/prompts.ts`](server/prompts.ts) requires falsifiable statements and requires the model to surface error handling, swallowed exceptions, edge cases, concurrency, and anything that fails silently. The server attaches the real diff hunks to each anchor. Results are cached by diff, comments, model, and prompt in the out-of-repo cache directory, so restarting costs nothing. Exploring the repo makes a first read take longer (minutes on a large PR) and use more of your Claude plan than reading the diff alone.
 
@@ -83,6 +85,8 @@ The page opens right away and loads in place. While a spec is being written or C
 ```
 
 The execution prompt gives Claude Code each change as CURRENT vs REQUIRED behavior, the anchors, and the reviewer comments on that sentence. It tells Claude to make the smallest change that makes each sentence true and to leave everything else alone. Comments you pushed back on are listed explicitly as "do not act on". The run uses `--output-format stream-json --verbose`, so each Read, Edit, Write, or command shows up as it happens. Nothing is committed. When the run ends, the Sync sheet shows the files Claude changed and their diff (also saved as `last-run.md` in the cache directory), and the command to pick up that exact Claude Code session in your terminal (`cd <repo> && claude --resume <session id>`), to ask why it did something or to keep going by hand. After a successful run the spec no longer matches the code, so another run against it is refused until you **Re-analyze diff**. Loading is refused while Claude Code is editing. The diff is relative to each file's contents just before the run, so edits you had already made aren't shown as Claude's.
+
+**Comments.** Review threads come from GitHub's GraphQL API (`reviewThreads`), which knows which threads are resolved or outdated; that filtering is deterministic, with no model involved. Open threads keep their replies (the opening comment plus up to the latest 20). Review summaries and conversation comments come from the REST API. If GraphQL isn't available, redline falls back to REST and says in the log that resolved threads are included.
 
 **Replies.** Only what you write is ever posted. `redline-pr` never drafts a reply for you, because a generated "fixed it" could claim a change Claude skipped. Replies you write in the margin are listed in the Sync sheet, where you can still edit them, and are posted only when you click **Post replies to GitHub**. That is separate from running Claude Code, so you can answer a reviewer without changing code, or post after you have seen what the run did. An identical reply is never posted twice (posted replies are recorded in the cache directory). Inline review comments get threaded replies. Review summaries and conversation comments get a quoted PR comment.
 
@@ -119,6 +123,8 @@ Running from source (`npx tsx bin/cli.ts`) still serves the page from the built 
 
 `npm test` never calls the real `claude` or GitHub: integration tests put fake `claude` and `gh` binaries first on `PATH` and run the built CLI against throwaway repos, checking every byte of each repo (`.git` included) before and after. Browser tests drive headless Chrome and are skipped if Chrome or Chromium isn't installed (set `CHROME_PATH` to point at one).
 
+Working on redline with a coding agent? [`AGENTS.md`](AGENTS.md) is the contract it must follow (design rules and the invariants above). `CLAUDE.md` points Claude Code at it.
+
 For hot reload on the UI, run the server with a fixed token and point Vite at it:
 
 ```
@@ -137,10 +143,10 @@ server/
   spec.ts          claude -p --json-schema call, anchor/comment assembly, cache
   sync.ts          spec.diff, edit merging, export, claude -p runs, reply posting
   git.ts diff.ts   diff collection and unified-diff parsing
-  github.ts        PR + comments via gh, reply posting
+  github.ts        PRs, review threads (GraphQL, resolved/outdated triage), comments, reply posting
   demo.ts          pre-baked demo PR
 shared/types.ts    the data contract between server and web
-web/src/           React + Tailwind UI
+web/src/           React + Tailwind UI (layout.ts: margin-note placement)
 ```
 
 ## License

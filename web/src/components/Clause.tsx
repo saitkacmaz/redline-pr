@@ -6,6 +6,8 @@ import { InlineCode } from './InlineCode';
 
 interface Props {
   clause: SpecClause;
+  /** Its margin note is hovered or focused: mark the sentence so the pairing is unmistakable. */
+  linked?: boolean;
   onEdit: (text: string) => void;
   onReset: () => void;
 }
@@ -39,7 +41,7 @@ function placeCaret(el: HTMLElement, point: { x: number; y: number } | null): vo
   selection.addRange(range);
 }
 
-export function Clause({ clause, onEdit, onReset }: Props) {
+export function Clause({ clause, linked = false, onEdit, onReset }: Props) {
   const [editing, setEditing] = useState(false);
   const [open, setOpen] = useState<string | null>(null);
   const editable = useRef<HTMLSpanElement>(null);
@@ -86,6 +88,7 @@ export function Clause({ clause, onEdit, onReset }: Props) {
   return (
     <div className="group">
       <p className="relative text-[16px] leading-[1.65] text-ink">
+        {linked && <span aria-hidden className="absolute -left-3 top-[0.35em] bottom-[0.35em] w-px bg-ink" />}
         {(edited || editing) && (
           <span aria-hidden className={`absolute -left-5 top-[0.35em] bottom-[0.35em] w-[2px] ${edited ? 'bg-del' : 'bg-rule'}`} />
         )}

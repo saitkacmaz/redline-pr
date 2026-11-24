@@ -36,11 +36,22 @@ const EXCLUDED_PATHS = [
   '*.min.css',
   '*.map',
   '*.snap',
+  '*.lock',
+  '*.pb.go',
+  '*_pb2.py',
+  '*_pb2.pyi',
+  '*.g.dart',
+  '*.freezed.dart',
 ];
+
+/** Directories that only ever hold generated output. */
+const EXCLUDED_DIRS = ['__snapshots__', '__generated__'];
 
 /** Drop the same generated files from a diff that didn't come from `diffAgainst` (e.g. `gh pr diff`). */
 export function isExcludedPath(path: string): boolean {
-  const name = path.split('/').pop() ?? path;
+  const parts = path.split('/');
+  const name = parts.at(-1) ?? path;
+  if (parts.slice(0, -1).some((dir) => EXCLUDED_DIRS.includes(dir))) return true;
   return EXCLUDED_PATHS.some((p) => (p.startsWith('*') ? name.endsWith(p.slice(1)) : name === p));
 }
 
@@ -66,6 +77,19 @@ export async function hasCommit(cwd: string, commit: string): Promise<boolean> {
   return (await run('git', ['cat-file', '-e', `${commit}^{commit}`], { cwd })).code === 0;
 }
 
+/** Whether any remote is configured. Local config only; no network. */
+export async function hasRemote(cwd: string): Promise<boolean> {
+  const res = await run('git', ['remote'], { cwd });
+  return res.code === 0 && res.stdout.trim().length > 0;
+}
+
+/** No base was given and none of the usual default branches exist here. */
+export class NoBaseBranchError extends Error {
+  constructor() {
+    super('No branch to compare against: redline looked for origin/HEAD, main, master and develop.');
+  }
+}
+
 async function refExists(cwd: string, ref: string): Promise<boolean> {
   const res = await run('git', ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`], { cwd });
   return res.code === 0;
@@ -74,7 +98,8 @@ async function refExists(cwd: string, ref: string): Promise<boolean> {
 /**
  * Resolve a base branch name to a ref that exists locally, preferring the remote-tracking copy.
  * Without an explicit base, the repo's default branch (origin/HEAD, then main, master, develop),
- * trying `current` last: diffing a branch against itself is always empty.
+ * trying `current` last: diffing a branch against itself is always empty. Works without any
+ * remote: then only the local branches are candidates. Throws NoBaseBranchError when none exist.
  */
 export async function resolveBaseRef(cwd: string, base: string | undefined, current?: string): Promise<{ name: string; ref: string }> {
   const candidates = base ? [base] : [];
@@ -91,11 +116,8 @@ export async function resolveBaseRef(cwd: string, base: string | undefined, curr
       if (await refExists(cwd, ref)) return { name, ref };
     }
   }
-  throw new Error(
-    base
-      ? `Base branch "${base}" not found locally or on origin. Try \`git fetch origin ${base}\`.`
-      : 'Could not detect a base branch. Pass one with --base <branch>.',
-  );
+  if (!base) throw new NoBaseBranchError();
+  throw new Error(`Base branch "${base}" not found locally or on origin. Try \`git fetch origin ${base}\`.`);
 }
 
 async function findMergeBase(cwd: string, baseRef: string): Promise<string> {
@@ -134,6 +156,7 @@ export async function diffAgainst(cwd: string, baseRef: string): Promise<string>
   const mergeBase = await findMergeBase(cwd, baseRef);
   const excludes = [
     ...EXCLUDED_PATHS.map((p) => `:(exclude,glob)**/${p}`),
+    ...EXCLUDED_DIRS.map((d) => `:(exclude,glob)**/${d}/**`),
     // Files the repo itself marks as generated or vendored (.gitattributes, as GitHub does).
     ':(exclude,attr:linguist-generated)',
     ':(exclude,attr:linguist-vendored)',

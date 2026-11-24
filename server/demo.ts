@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import type { MarginComment, SpecDocument } from '../shared/types.js';
+import type { HiddenThread, MarginComment, SpecDocument } from '../shared/types.js';
 import { hunkFor, parseUnifiedDiff } from './diff.js';
 
 /**
@@ -275,6 +275,13 @@ const COMMENTS: MarginComment[] = [
     body: 'If every record fails we still return 200, so S3 notifications never retry and the file is lost without a trace. Can this be a 5xx when nothing was ingested, or at least 207 with the failures listed?',
     file: HANDLER,
     line: 52,
+    replies: [
+      {
+        author: 'sam-okafor',
+        body: 'Agreed. 502 when nothing was ingested, so S3 retries, and 207 with the failed keys for partial failures. Will update.',
+      },
+    ],
+    replied: true,
     clauseId: 's3-c3',
     status: 'open',
   },
@@ -284,6 +291,13 @@ const COMMENTS: MarginComment[] = [
     body: 'This SELECT-then-UPDATE will double-claim as soon as we run more than one worker. `SELECT ... FOR UPDATE SKIP LOCKED` inside the same transaction fixes it.',
     file: JOBS,
     line: 31,
+    replies: [
+      { author: 'sam-okafor', body: 'We only run one worker today, so I left it for a follow-up.' },
+      {
+        author: 'dkowalski',
+        body: 'Autoscaling is enabled for this queue next sprint, so that won’t hold for long. I’d rather not merge a known double-claim; it’s a two-line change.',
+      },
+    ],
     clauseId: 's4-c2',
     status: 'open',
   },
@@ -295,6 +309,26 @@ const COMMENTS: MarginComment[] = [
     line: 29,
     clauseId: 's1-c2',
     status: 'open',
+  },
+];
+
+/** Threads GitHub marks resolved or outdated: hidden from the margin and the prompt by default. */
+const HIDDEN: HiddenThread[] = [
+  {
+    id: 'rc-990',
+    author: 'maya-chen',
+    body: 'Typo in the log message: "ingets".',
+    file: HANDLER,
+    reason: 'resolved',
+    replyCount: 1,
+  },
+  {
+    id: 'rc-991',
+    author: 'dkowalski',
+    body: 'Pull the 50 MB limit into a named constant instead of a magic number.',
+    file: HANDLER,
+    reason: 'outdated',
+    replyCount: 0,
   },
 ];
 
@@ -323,5 +357,6 @@ export function demoDocument(): SpecDocument {
       })),
     })),
     comments: COMMENTS.map((c) => ({ ...c })),
+    hiddenThreads: HIDDEN.map((t) => ({ ...t })),
   };
 }

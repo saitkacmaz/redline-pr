@@ -25,7 +25,7 @@ Usage
   redline 14        PR #14 (same as --pr 14)
 
 Options
-  --base <branch>   Base branch to diff against (default: PR base, origin/HEAD, main, master)
+  --base <branch>   Base branch to diff against (default: PR base, origin/HEAD, main, master, develop)
   --pr <number>     GitHub PR number (default: the PR for the current branch)
   --demo            Load a pre-baked PR; no repo, gh, or claude login needed
   --dry-run         On Sync, write the plan to the cache dir instead of running claude -p
