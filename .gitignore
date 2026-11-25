@@ -1,4 +1,12 @@
 node_modules
 dist
-.redline
 *.log
+# npm pack output
+*.tgz
+# OS and editor clutter
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+# browser-automation snapshots
+.playwright-mcp/
