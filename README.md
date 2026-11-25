@@ -1,19 +1,21 @@
 # redline-pr
 
+## The one-minute read, written for people
+
 redline-pr turns a pull request's diff into a one-page, plain-English description of what the code does, with the PR's open review comments in the margin. Edit a sentence, and Claude Code or Codex changes the code to match.
 
-## Why
+### Why
 
 A coding agent writes an 800-line PR in minutes. Reviewing it means either reverse-engineering the diff and prompting a fix for every comment by hand, or letting the agent act on every comment at once with none of your judgment. redline-pr keeps the judgment with you and the typing with the agent.
 
-## How you use it
+### How you use it
 
 1. Run `redline` in your repo, on your branch. `redline claude` or `redline codex` picks the agent; `redline --demo` needs no repo.
 2. Read the spec. Each sentence is a checkable statement ("If the S3 read raises, the handler logs and still returns 200 OK"), linked to its lines; click to open the hunk inline.
 3. Answer the margin comments: rewrite a sentence to dictate a fix, reply to explain, or mark a comment **push back** so the agent leaves it alone.
 4. Press **Sync**. Only the sentences you changed go to the agent. Check the diff it made, then **Re-analyze diff** and repeat.
 
-## Before you adopt it
+### Before you adopt it
 
 - **No API keys.** It uses your logged-in `claude` or `codex` CLI and the Claude or ChatGPT plan you already have.
 - **Zero trace.** Caches live in `~/.cache/redline-pr/` (`%LOCALAPPDATA%` on Windows), never in your repo.
@@ -24,7 +26,11 @@ A coding agent writes an 800-line PR in minutes. Reviewing it means either rever
 
 ---
 
-## Install
+## Reference
+
+Everything below is the detail: install, commands, flags, how it works, and the guarantees it keeps. Coding agents working on redline should read [`AGENTS.md`](AGENTS.md) too.
+
+### Install
 
 redline-pr isn't on npm yet. Install it from source once, then use the `redline` command in any repo:
 
@@ -43,7 +49,7 @@ The command is also installed as `redline-pr`, if `redline` clashes with somethi
 
 The demo loads a pre-baked PR: an S3 CSV ingestion endpoint with a silent `200 OK` on failure, a Postgres check-then-act race in job claiming, and three teammate comments. It needs no repo, no `gh`, and no agent login.
 
-## Usage
+### Usage
 
 ```
 redline            # the current branch's PR, or its local diff if it has none
@@ -81,7 +87,7 @@ The page opens right away and loads in place. While a spec is being written or t
 | `--no-open` | Don't open the browser. |
 | `-v`, `--version` | Print the version. |
 
-### Requirements
+#### Requirements
 
 - Node 20+ and `git`.
 - At least one agent CLI on `PATH`, logged in:
@@ -89,7 +95,7 @@ The page opens right away and loads in place. While a spec is being written or t
   - [Codex CLI](https://developers.openai.com/codex/cli) (`codex`), after `codex login` with your ChatGPT account. No `OPENAI_API_KEY`.
 - Optional: [`gh`](https://cli.github.com), authenticated, to list PRs, load review comments, and post replies. Without it, or in a repo with no remote or one hosted outside GitHub (GitLab, Bitbucket, your own server), redline reviews the local branch diff as usual. The PR list then says in one line why it's empty, and `gh` isn't run at all when there's no remote.
 
-### Environment
+#### Environment
 
 | Variable | Default | |
 | --- | --- | --- |
@@ -99,7 +105,7 @@ The page opens right away and loads in place. While a spec is being written or t
 | `REDLINE_CODEX_FLAGS` | `--sandbox workspace-write` | Flags passed to `codex exec` on Sync, split like a shell would. The default lets Codex edit files and run commands inside the repo, without network access by default. Set to an empty string to use your Codex config's sandbox. |
 | `XDG_CACHE_HOME` | `~/.cache` (`%LOCALAPPDATA%` on Windows) | Root for all runtime artifacts (see below). Must be outside the repo. |
 
-## How it works
+### How it works
 
 **The diff.** `git diff-index -p <merge-base>` against the base branch, covering committed, staged, and unstaged changes to tracked files. Untracked files aren't included, so `git add` new files first. Lockfiles, source maps, minified files, snapshots (`*.snap`, `__snapshots__/`), generated protobuf and Dart code, `__generated__/` directories, and anything your `.gitattributes` marks `linguist-generated` or `linguist-vendored` are excluded. Diffs too large to read in one pass (about 150k tokens) fail fast and list the largest files.
 
@@ -141,7 +147,7 @@ The execution prompt gives the agent each change as CURRENT vs REQUIRED behavior
 
 Your edits are saved in the browser's `localStorage` per branch. Because each repo gets the same port every launch, they survive reloads and restarts, until the spec itself changes.
 
-## Zero-trace isolation
+### Zero-trace isolation
 
 `redline-pr` is built to run inside sensitive work repositories. It never creates, modifies, or leaves behind anything in the repository's working tree or its `.git` directory.
 
@@ -154,7 +160,7 @@ Your edits are saved in the browser's `localStorage` per branch. Because each re
 
 The one exception is what you ask for: **Run** lets the agent edit source files in the repo to apply your spec changes. Those edits are the point of the tool, and they show up in `git status` for you to review.
 
-## macOS, Linux and Windows
+### macOS, Linux and Windows
 
 Everything platform-specific lives in [`server/platform.ts`](server/platform.ts). redline is used daily on macOS; the Linux and Windows code paths are covered by unit tests that run each branch on any machine.
 
@@ -163,7 +169,7 @@ Everything platform-specific lives in [`server/platform.ts`](server/platform.ts)
 - **The browser.** It opens with `open`, `start` or `xdg-open`. Over SSH or on a Linux box with no display, redline just prints the URL.
 - **Line endings.** Diffs with Windows line endings parse the same as Unix ones.
 
-## Security
+### Security
 
 The local server binds to `127.0.0.1` and requires a per-launch token, which is injected into the page, on every `/api` call. Other sites open in your browser can't trigger a sync. Requests whose `Host` isn't `127.0.0.1` or `localhost` are refused, which blocks DNS-rebinding pages from reading the token. The server builds every prompt from its own copy of the spec and takes only your sentence edits, comment statuses, and replies from the browser. An agent run that hits the 30-minute limit is stopped with its whole process group and reported as a failure. Ctrl-C or closing the terminal stops any running `claude` or `codex` too.
 
@@ -176,7 +182,7 @@ Either way, the agent is told to change only what your edited sentences require,
 
 Your code goes to the agent's provider through your login, as with any use of that CLI: the diff, the files the agent chooses to read, and the review comments. That means Anthropic for Claude Code and OpenAI for Codex. Review comments can be written by anyone who can comment on the PR, so the execution prompt fences them as quoted data and tells the agent never to act on instructions inside them.
 
-## Development
+### Development
 
 ```
 npm install
@@ -219,6 +225,6 @@ shared/types.ts    the data contract between server and web
 web/src/           React + Tailwind UI (layout.ts: margin-note placement)
 ```
 
-## License
+### License
 
 MIT
