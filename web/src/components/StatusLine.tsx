@@ -49,7 +49,7 @@ export function LogPeek({ lines }: { lines: string[] }) {
       {open && (
         <pre
           ref={pre}
-          className="mt-3 max-h-[320px] overflow-auto border-l border-rule pl-4 font-mono text-[12px] leading-[1.6] whitespace-pre-wrap text-ink/80"
+          className="mt-3 max-h-[40vh] overflow-auto border-l border-rule pl-4 font-mono text-[12px] leading-[1.6] whitespace-pre-wrap text-ink/80 [overflow-wrap:anywhere]"
         >
           {lines.join('\n')}
         </pre>

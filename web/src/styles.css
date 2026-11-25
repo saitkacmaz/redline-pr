@@ -5,8 +5,15 @@
   --color-ink: #141413;
   --color-muted: #6b6b68;
   --color-rule: #e6e6e3;
+  --color-edge: #d4d4d0;
+  --color-faint: #a3a39e;
   --color-del: #b91c1c;
   --color-ins: #15803d;
+
+  /* The three layout tiers (see web/src/grid.ts): one column, fluid two columns, fixed two columns. */
+  /* In rem like Tailwind's own (sm = 40rem = 640px): mixed units would sort the variants wrongly. */
+  --breakpoint-split: 53.75rem; /* 860px */
+  --breakpoint-wide: 70rem; /* 1120px */
 
   --font-sans: "Inter", "Inter Variable", system-ui, -apple-system, "Segoe UI", sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
@@ -20,6 +27,11 @@
     font-feature-settings: "cv11", "ss01";
     -webkit-font-smoothing: antialiased;
     text-rendering: optimizeLegibility;
+  }
+
+  body,
+  #root {
+    min-height: 100dvh;
   }
 
   ::selection {

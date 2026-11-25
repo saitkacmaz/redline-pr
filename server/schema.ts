@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { LoadTarget, PostRepliesRequest, SpecDocument, SyncRequest } from '../shared/types.js';
+import { AGENT_NAMES, type LoadTarget, type PostRepliesRequest, type SpecDocument, type SyncRequest } from '../shared/types.js';
 
 const CodeAnchorSchema = z.object({
   file: z.string(),
@@ -61,6 +61,7 @@ const SpecDocumentSchema: z.ZodType<SpecDocument> = z.object({
 export const SyncRequestSchema: z.ZodType<SyncRequest> = z.object({
   doc: SpecDocumentSchema,
   mode: z.enum(['run', 'export']),
+  agent: z.enum(AGENT_NAMES).optional(),
 });
 
 export const PlanRequestSchema = z.object({ doc: SpecDocumentSchema });
@@ -78,3 +79,4 @@ const LoadTargetSchema: z.ZodType<LoadTarget> = z.discriminatedUnion('kind', [
 ]);
 
 export const LoadRequestSchema = z.object({ target: LoadTargetSchema });
+

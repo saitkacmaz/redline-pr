@@ -1,23 +1,14 @@
 import { createHash, randomBytes } from 'node:crypto';
-import { rmSync } from 'node:fs';
-import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { z } from 'zod';
 import type { MarginComment, SpecDocument, SpecSection } from '../shared/types.js';
 import { findFile, hunkFor, numberedDiff, type ParsedFile } from './diff.js';
-import { claudeStream, type ClaudeResult, type StreamHandlers } from './claude-stream.js';
-import { run } from './exec.js';
 import { SPEC_SYSTEM_PROMPT, buildSpecUserPrompt, threadText } from './prompts.js';
+import type { StreamHandlers } from './providers/steps.js';
+import type { AgentProvider } from './providers/types.js';
 
-/** Optional model override passed to `claude --model`; unset means the CLI's own default. */
-export function resolveModel(): string | undefined {
-  return process.env.REDLINE_MODEL?.trim() || undefined;
-}
-
-export function modelLabel(): string {
-  return resolveModel() ?? 'claude CLI default model';
-}
+export { describeFailure } from './providers/claude.js';
 
 const SPEC_TIMEOUT_MS = 20 * 60 * 1000;
 
@@ -46,6 +37,7 @@ type LlmSpec = z.infer<typeof LlmSpecSchema>;
 
 // The claude CLI's validator doesn't resolve the draft 2020-12 meta-schema, so drop the `$schema` header.
 const { $schema: _metaSchema, ...specJsonSchema } = z.toJSONSchema(LlmSpecSchema);
+export const SPEC_SCHEMA: Record<string, unknown> = specJsonSchema;
 const SPEC_JSON_SCHEMA = JSON.stringify(specJsonSchema);
 
 
@@ -57,45 +49,21 @@ export interface SpecInput {
   rawDiff: string;
   files: ParsedFile[];
   comments: MarginComment[];
-  /** The repository root. Claude reads it with read-only tools. */
+  /** The repository root. The agent reads it, read-only. */
   repoRoot: string;
   /** Set when the files on disk are not the code this diff produces (a PR that isn't checked out). */
   contextNote?: string;
-  cacheDir: string;
+  /** This repo's directory under ~/.cache/redline-pr/; specs are cached in its cache/ folder. */
+  artifactDir: string;
+  agent: AgentProvider;
+  /** Passed to the agent's --model; unset means its CLI's own default. */
+  model?: string;
 }
 
 export interface SpecHooks extends StreamHandlers {
-  /** Runs only when claude -p is actually about to be called (not on a cache hit). */
+  /** Runs only when the agent is actually about to be called (not on a cache hit). */
   onGenerate?: () => void;
   signal?: AbortSignal;
-}
-
-const SUBTYPES: Record<string, string> = {
-  error_max_turns: 'Claude stopped at its turn limit before writing the spec.',
-  error_during_execution: 'Claude Code stopped with an error while writing the spec.',
-  error_max_structured_output_retries: 'Claude could not produce output matching the spec schema.',
-};
-
-/** Keep the end of long output: that's where CLIs put the actual error. */
-function tail(text: string, max = 1500): string {
-  const t = text.trim();
-  return t.length > max ? `…${t.slice(-max)}` : t;
-}
-
-/** One actionable sentence (or two) for a failed `claude -p`, never a 2 MB dump. */
-export function describeFailure(
-  res: { code: number; stdout: string; stderr: string; timedOut: boolean },
-  parsed: { subtype?: string | undefined; result?: string | undefined } | undefined,
-): string {
-  if (res.timedOut) {
-    return `claude -p did not finish within ${SPEC_TIMEOUT_MS / 60000} minutes. A very large diff is the usual cause; try a closer --base.`;
-  }
-  const known = parsed?.subtype ? SUBTYPES[parsed.subtype] : undefined;
-  let detail = known ?? (tail(parsed?.result ?? '') || tail(res.stderr) || tail(res.stdout) || `exit code ${res.code}`);
-  // Usage-limit messages end in a raw epoch ("...|1764000000"); show when it resets.
-  detail = detail.replace(/\|(\d{10})\b/, (_, epoch: string) => ` (resets ${new Date(Number(epoch) * 1000).toLocaleString()})`);
-  const hint = /log ?in|auth|credential|api key|\/login/i.test(detail) ? ' Run `claude` once and log in, then retry.' : '';
-  return `claude -p could not generate the spec: ${detail}${hint}`;
 }
 
 /** Rough prompt budget. Claude's context is ~200k tokens; leave room for the schema and the answer. */
@@ -119,65 +87,8 @@ export function checkBudget(files: ParsedFile[], prompt: string): void {
   );
 }
 
-/** Pull a JSON object out of free text, tolerating ```json fences or surrounding prose. */
-function parseJsonText(text: string): unknown {
-  const fenced = /```(?:json)?\s*([\s\S]*?)```/.exec(text)?.[1];
-  const candidate = (fenced ?? text).trim();
-  try {
-    return JSON.parse(candidate);
-  } catch {
-    const first = candidate.indexOf('{');
-    const last = candidate.lastIndexOf('}');
-    if (first === -1 || last <= first) throw new Error('no JSON object found');
-    return JSON.parse(candidate.slice(first, last + 1));
-  }
-}
-
-/**
- * Read-only tools only. Bash is left out on purpose: even `git status`
- * rewrites .git/index, and a shell could write anywhere.
- */
-const READ_ONLY_TOOLS = 'Read,Grep,Glob';
-
-/**
- * Generate the spec with the local `claude` CLI, so it runs on the user's
- * existing Claude login. Claude gets the repo with read-only tools and decides
- * for itself what beyond the diff is worth reading: the code the diff calls,
- * tests, the project's docs and agent instructions.
- *
- * It starts in an empty temp dir with the repo added via --add-dir, not in the
- * repo: on startup Claude Code runs `git status` in its working directory,
- * which takes .git/index.lock and can rewrite a stale index. Nothing from the
- * repo's own Claude config is loaded (no settings, hooks, MCP servers, or
- * skills), since hooks can run commands and write files; session persistence
- * is off. The diff arrives over stdin.
- */
+/** Ask the agent for the spec and hold its answer to the schema, whichever agent wrote it. */
 async function callModel(input: SpecInput, hooks: SpecHooks): Promise<LlmSpec> {
-  const model = resolveModel();
-  const args = [
-    '-p',
-    '--output-format',
-    'stream-json',
-    '--verbose',
-    '--json-schema',
-    SPEC_JSON_SCHEMA,
-    '--system-prompt',
-    SPEC_SYSTEM_PROMPT,
-    '--tools',
-    READ_ONLY_TOOLS,
-    '--allowedTools',
-    READ_ONLY_TOOLS,
-    '--add-dir',
-    input.repoRoot,
-    '--setting-sources',
-    '',
-    '--settings',
-    '{"disableAllHooks":true}',
-    '--strict-mcp-config',
-    '--disable-slash-commands',
-    '--no-session-persistence',
-    ...(model ? ['--model', model] : []),
-  ];
   const prompt = buildSpecUserPrompt({
     prTitle: input.prTitle,
     branch: input.branch,
@@ -189,39 +100,22 @@ async function callModel(input: SpecInput, hooks: SpecHooks): Promise<LlmSpec> {
   });
 
   checkBudget(input.files, prompt);
-  const scratch = await mkdtemp(join(tmpdir(), 'redline-pr-'));
-  const cleanup = () => rmSync(scratch, { recursive: true, force: true });
-  process.once('exit', cleanup); // Ctrl-C mid-generation exits before `finally` runs.
-  const stream = claudeStream(input.repoRoot, hooks);
-  const res = await run('claude', args, {
-    cwd: scratch,
-    input: prompt,
-    timeoutMs: SPEC_TIMEOUT_MS,
-    onStdout: (chunk) => stream.push(chunk),
-    ...(hooks.signal ? { signal: hooks.signal } : {}),
-  }).finally(() => {
-    process.off('exit', cleanup);
-    cleanup();
-  });
-  if (hooks.signal?.aborted) throw new Error('Stopped.');
-
-  const parsed: ClaudeResult | undefined = stream.result(res.stdout);
-
-  if (!parsed || res.code !== 0 || parsed.is_error) throw new Error(describeFailure(res, parsed));
-
-  let output: unknown = parsed.structured_output;
-  if (output === undefined || output === null) {
-    if (!parsed.result) throw new Error(describeFailure(res, parsed));
-    try {
-      output = parseJsonText(parsed.result);
-    } catch {
-      throw new Error('claude -p returned a result that is not JSON. Is your claude CLI current enough for --json-schema?');
-    }
-  }
-
+  const output = await input.agent.generateSpec(
+    {
+      system: SPEC_SYSTEM_PROMPT,
+      prompt,
+      schema: SPEC_SCHEMA,
+      repoRoot: input.repoRoot,
+      artifactDir: input.artifactDir,
+      ...(input.model ? { model: input.model } : {}),
+      timeoutMs: SPEC_TIMEOUT_MS,
+      ...(hooks.signal ? { signal: hooks.signal } : {}),
+    },
+    hooks,
+  );
   const spec = LlmSpecSchema.safeParse(output);
   if (!spec.success) {
-    throw new Error(`claude -p returned JSON that does not match the spec schema: ${spec.error.message}`);
+    throw new Error(`${input.agent.label} returned JSON that does not match the spec schema: ${spec.error.message}`);
   }
   return spec.data;
 }
@@ -285,10 +179,10 @@ function distance(clause: { anchors: { startLine: number; endLine: number }[] },
   );
 }
 
-/** Generate the spec, reusing a cached copy when the diff, comments, model, and prompt are unchanged. */
+/** Generate the spec, reusing a cached copy when the diff, comments, agent, model, and prompt are unchanged. */
 export async function generateSpec(input: SpecInput, hooks: SpecHooks = {}): Promise<SpecDocument> {
   const key = createHash('sha256')
-    .update(modelLabel())
+    .update(`${input.agent.name}\0${input.model ?? ''}`)
     .update(SPEC_JSON_SCHEMA)
     .update(SPEC_SYSTEM_PROMPT)
     .update(input.contextNote ?? '')
@@ -296,7 +190,8 @@ export async function generateSpec(input: SpecInput, hooks: SpecHooks = {}): Pro
     .update(JSON.stringify(input.comments.map((c) => [c.id, threadText(c)])))
     .digest('hex')
     .slice(0, 16);
-  const cacheFile = join(input.cacheDir, `spec-${key}.json`);
+  const cacheDir = join(input.artifactDir, 'cache');
+  const cacheFile = join(cacheDir, `spec-${key}.json`);
 
   try {
     return assemble(input, LlmSpecSchema.parse(JSON.parse(await readFile(cacheFile, 'utf8'))));
@@ -306,7 +201,7 @@ export async function generateSpec(input: SpecInput, hooks: SpecHooks = {}): Pro
 
   hooks.onGenerate?.();
   const spec = await callModel(input, hooks);
-  await mkdir(input.cacheDir, { recursive: true, mode: 0o700 });
+  await mkdir(cacheDir, { recursive: true, mode: 0o700 });
   await writeFile(cacheFile, JSON.stringify(spec, null, 2), { mode: 0o600 });
   return assemble(input, spec);
 }

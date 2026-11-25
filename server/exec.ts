@@ -1,4 +1,5 @@
-import { spawn, type ChildProcess } from 'node:child_process';
+import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
+import { resolveSpawn } from './platform.js';
 
 export interface RunResult {
   code: number;
@@ -28,6 +29,11 @@ const live = new Set<ChildProcess>();
  */
 function killGroup(child: ChildProcess, signal: NodeJS.Signals): void {
   if (child.pid === undefined) return;
+  if (process.platform === 'win32') {
+    // No process groups on Windows: taskkill /T takes the whole tree (cmd.exe and what it started).
+    if (child.exitCode === null) spawnSync('taskkill', ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
+    return;
+  }
   try {
     process.kill(-child.pid, signal);
   } catch {
@@ -41,13 +47,19 @@ export function killAll(): void {
   for (const child of live) killGroup(child, 'SIGKILL');
 }
 
-/** Spawn without a shell so arguments are never interpolated. */
+/**
+ * Spawn without a shell so arguments are never interpolated. On Windows, npm's `.cmd`
+ * shims (claude, codex) are resolved first (see platform.ts), since they can't be spawned directly.
+ */
 export function run(cmd: string, args: readonly string[], opts: RunOptions = {}): Promise<RunResult> {
   return new Promise((resolve, reject) => {
-    const child = spawn(cmd, args, {
+    const target = resolveSpawn(cmd, args);
+    const child = spawn(target.file, target.args, {
       cwd: opts.cwd,
       env: opts.env ? { ...process.env, ...opts.env } : process.env,
       stdio: ['pipe', 'pipe', 'pipe'],
+      windowsVerbatimArguments: target.verbatim,
+      windowsHide: true,
       // Own process group: a timeout or shutdown can take down the tools the child started.
       detached: process.platform !== 'win32',
     });

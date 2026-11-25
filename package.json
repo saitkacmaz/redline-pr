@@ -3,10 +3,27 @@
   "version": "0.1.0",
   "description": "Read a PR as a plain-English behavioral spec, redline the sentences, and sync the edits back to code with Claude Code.",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/saitkacmaz/redline-pr.git"
+  },
+  "homepage": "https://github.com/saitkacmaz/redline-pr#readme",
+  "bugs": {
+    "url": "https://github.com/saitkacmaz/redline-pr/issues"
+  },
+  "keywords": [
+    "pull-request",
+    "code-review",
+    "claude",
+    "claude-code",
+    "behavioral-spec",
+    "cli",
+    "github"
+  ],
   "type": "module",
   "bin": {
-    "redline": "./dist/bin/cli.js",
-    "redline-pr": "./dist/bin/cli.js"
+    "redline": "dist/bin/cli.js",
+    "redline-pr": "dist/bin/cli.js"
   },
   "files": [
     "dist"
@@ -17,13 +34,13 @@
   "scripts": {
     "build": "npm run build:web && npm run build:server",
     "build:web": "vite build",
-    "build:server": "tsc -p tsconfig.build.json && node -e \"require('fs').chmodSync('dist/bin/cli.js', 0o755)\"",
+    "build:server": "tsc -p tsconfig.build.json && node scripts/postbuild.mjs",
     "typecheck": "tsc --noEmit",
     "dev:web": "vite",
     "demo": "tsx bin/cli.ts --demo",
     "start": "node dist/bin/cli.js",
     "install-global": "npm run build && npm link",
-    "prepare": "npm run build",
+    "prepublishOnly": "npm run build",
     "test": "node --import tsx --test --test-reporter=spec \"test/**/*.test.ts\"",
     "pretest": "npm run build"
   },

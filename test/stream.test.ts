@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { claudeStream, describeToolUse } from '../server/claude-stream.js';
+import { claudeStream, describeToolUse } from '../server/providers/claude-stream.js';
 
 test('tool calls read as plain steps, with repo-relative paths', () => {
   assert.equal(describeToolUse('Read', { file_path: '/repo/src/ingest.py' }, '/repo'), 'Reading src/ingest.py');

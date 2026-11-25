@@ -7,7 +7,7 @@ import type { PrListResponse, SyncResult } from '../shared/types.js';
 import { api, boot, events, fakeGh, fakeGhWithPr, rawPost, ready, runCli, settled } from './cli-harness.js';
 import { request } from 'node:http';
 import type { PostedReply } from '../shared/types.js';
-import { changedPaths, fakeClaude, git, makeRepo, readCalls, snapshot, tempDir } from './helpers.js';
+import { changedPaths, fakeClaude, fakeCodex, git, isolatedPath, makeRepo, readCalls, snapshot, tempDir } from './helpers.js';
 
 const SPEC = {
   sections: [
@@ -24,6 +24,12 @@ test('--help prints usage and exits 0', async () => {
   assert.equal(code, 0);
   assert.match(out, /Usage/);
   assert.match(out, /--dry-run/);
+});
+
+test('--version prints the package version', async () => {
+  const { code, out } = await runCli(['--version']);
+  assert.equal(code, 0);
+  assert.equal(out.trim(), (JSON.parse(readFileSync(join(import.meta.dirname, '..', 'package.json'), 'utf8')) as { version: string }).version);
 });
 
 test('rejects a non-numeric --pr and unknown flags', async () => {
@@ -111,11 +117,13 @@ test('live run: read-only until Sync, then only the code edit lands in the repo'
     assert.deepEqual(changedPaths(before, snapshot(repo)), [], 'nothing in the repo (incl. .git) changes before Sync runs');
 
     const result = await api<SyncResult>(r, '/api/sync', { doc, mode: 'run' });
-    assert.equal(result.claude?.exitCode, 0);
+    assert.equal(result.agent?.exitCode, 0);
+    assert.equal(result.agent?.name, 'claude');
     assert.equal(result.ok, true);
     assert.deepEqual(result.changes?.files, ['src/app.js'], 'the result reports exactly what claude changed');
     assert.match(result.changes?.diff ?? '', /^\+\/\/ edited by fake claude$/m);
-    assert.equal(result.claude?.sessionId, 'fake-session-1', 'the run names its Claude Code session');
+    assert.equal(result.agent?.sessionId, 'fake-session-1', 'the run names its Claude Code session');
+    assert.equal(result.agent?.resume, `cd ${repo} && claude --resume fake-session-1`);
     assert.match(readFileSync(join(cache, 'redline-pr', readdirSync(join(cache, 'redline-pr'))[0]!, 'last-run.md'), 'utf8'), new RegExp(`cd ${repo} && claude --resume fake-session-1`));
     const syncCall = readCalls(logFile).at(-1)!;
     assert.equal(syncCall.cwd, repo);
@@ -524,6 +532,258 @@ test('/api/events streams the real steps of a load and a run', async () => {
     const steps = runEvents.flatMap((e) => (e.type === 'activity' && e.activity.kind === 'sync' ? [`${e.activity.state}:${e.activity.step}`] : []));
     assert.deepEqual(steps, ['running:Starting Claude Code', 'running:Editing src/app.js', 'done:Synced — 1 file modified in 1s']);
     assert.ok(runEvents.some((e) => e.type === 'log' && e.line.endsWith('Change 1: edited src/app.js')), 'Claude’s notes are in the log');
+  } finally {
+    await r.stop();
+  }
+});
+
+/* ---- Codex ---- */
+
+type CodexCall = { args: string[]; cwd: string; input: string; schema: Record<string, unknown> | null };
+const codexCalls = (logFile: string): CodexCall[] => readCalls(logFile) as CodexCall[];
+const after = (args: string[], flag: string): string | undefined => (args.includes(flag) ? args[args.indexOf(flag) + 1] : undefined);
+const isInside = (path: string, dir: string): boolean => path === dir || path.startsWith(`${dir}/`);
+
+test('with only codex installed, redline uses it, read-only, leaving its schema and scratch files only under the cache', async () => {
+  const repo = makeRepo();
+  const cache = tempDir('cache');
+  const { binDir, logFile } = fakeCodex(SPEC);
+  const env = { XDG_CACHE_HOME: cache, PATH: isolatedPath(binDir) };
+  const before = snapshot(repo);
+  const r = await boot([], { cwd: repo, env });
+  try {
+    const { doc, session } = await ready(r);
+    assert.equal(session.activeAgent, 'codex');
+    assert.deepEqual(session.providers, { claude: { installed: false, loggedIn: false }, codex: { installed: true, loggedIn: true } });
+    assert.equal(doc.sections[0]?.clauses[0]?.originalText, SPEC.sections[0]!.clauses[0]!.text);
+    assert.match(r.output(), /agent → Codex/);
+
+    const [spec] = codexCalls(logFile);
+    assert.ok(spec);
+    const args = spec.args;
+    assert.equal(args[0], 'exec');
+    for (const flag of ['--json', '--ephemeral', '--ignore-user-config', '--skip-git-repo-check']) assert.ok(args.includes(flag), flag);
+    assert.equal(after(args, '--sandbox'), 'read-only');
+    assert.equal(args.at(-1), '-', 'the prompt arrives on stdin');
+    assert.match(spec.input, /You reverse-engineer a code diff/);
+    assert.match(spec.input, new RegExp(`Repository: ${repo}`));
+
+    // Zero trace: the schema, the answer file and Codex's working directory are all under the cache.
+    const root = join(cache, 'redline-pr');
+    const schema = after(args, '--output-schema')!;
+    const answer = after(args, '--output-last-message')!;
+    assert.equal(schema, join(root, 'schemas', 'spec-schema.json'));
+    for (const path of [schema, answer, spec.cwd, after(args, '--cd')!]) {
+      assert.ok(isInside(path, root), `${path} is under the cache`);
+      assert.ok(!isInside(path, repo), `${path} is not in the repo`);
+    }
+    assert.equal(spec.schema?.additionalProperties, false, 'the schema was on disk, strict, when Codex started');
+    assert.ok(existsSync(schema));
+    assert.equal(existsSync(spec.cwd), false, 'the scratch dir is gone afterwards');
+    assert.equal(existsSync(answer), false);
+  } finally {
+    await r.stop();
+  }
+  assert.deepEqual(changedPaths(before, snapshot(repo)), [], 'loading with Codex left every byte of the repo, .git included, alone');
+});
+
+test('Sync with Codex runs in the repo with workspace-write, streams its steps, and names the session to resume', async () => {
+  const repo = makeRepo();
+  const { binDir, logFile } = fakeCodex(SPEC);
+  const r = await boot([], { cwd: repo, env: { XDG_CACHE_HOME: tempDir('cache'), PATH: isolatedPath(binDir) } });
+  try {
+    const { doc } = await ready(r);
+    const clause = doc.sections[0]!.clauses[0]!;
+    const edited = { ...doc, sections: [{ ...doc.sections[0]!, clauses: [{ ...clause, currentText: 'If adding throws, `add` rethrows.' }] }] };
+    const before = snapshot(repo);
+    let result: SyncResult | undefined;
+    const seen = await events(r, async () => {
+      result = await api<SyncResult>(r, '/api/sync', { doc: edited, mode: 'run' });
+    });
+    assert.ok(result);
+    assert.equal(result.ok, true, result.summary);
+    assert.match(result.summary, /^Synced — 1 file modified in \d+s$/);
+    assert.deepEqual(result.changes?.files, ['src/app.js']);
+    assert.deepEqual(changedPaths(before, snapshot(repo)), ['src/app.js'], 'only the edit lands in the repo');
+    assert.equal(result.agent?.name, 'codex');
+    assert.equal(result.agent?.output, 'Change 1: edited src/app.js');
+    assert.equal(result.agent?.resume, `cd ${repo} && codex resume thread-1`);
+
+    const sync = codexCalls(logFile).at(-1)!;
+    assert.equal(sync.cwd, repo);
+    assert.equal(after(sync.args, '--sandbox'), 'workspace-write');
+    assert.equal(sync.args.includes('--ephemeral'), false, 'the session is kept, so it can be resumed');
+    assert.match(sync.input, /REQUIRED behavior: If adding throws, `add` rethrows\./);
+
+    const steps = seen.flatMap((e) => (e.type === 'activity' && e.activity.kind === 'sync' ? [`${e.activity.state}:${e.activity.step}`] : []));
+    assert.deepEqual([...new Set(steps)].slice(0, 2), ['running:Starting Codex', 'running:Editing src/app.js']);
+  } finally {
+    await r.stop();
+  }
+});
+
+test('a Codex API error shows its own sentence in the page and writes nothing to the repo', async () => {
+  const repo = makeRepo();
+  const { binDir } = fakeCodex(SPEC, { failSpec: "The 'gpt-x' model is not supported when using Codex with a ChatGPT account." });
+  const before = snapshot(repo);
+  const r = await boot([], { cwd: repo, env: { XDG_CACHE_HOME: tempDir('cache'), PATH: isolatedPath(binDir) } });
+  try {
+    const { view } = await settled(r);
+    assert.deepEqual(view, {
+      status: 'error',
+      message: "codex exec could not generate the spec: The 'gpt-x' model is not supported when using Codex with a ChatGPT account.",
+    });
+  } finally {
+    await r.stop();
+  }
+  assert.deepEqual(changedPaths(before, snapshot(repo)), []);
+});
+
+test('a Codex Sync that fails says why in the result itself, and changes nothing', async () => {
+  const repo = makeRepo();
+  const reason = "The 'gpt-x' model is not supported when using Codex with a ChatGPT account.";
+  const { binDir } = fakeCodex(SPEC, { failSync: reason });
+  const r = await boot([], { cwd: repo, env: { XDG_CACHE_HOME: tempDir('cache'), PATH: isolatedPath(binDir) } });
+  try {
+    const { doc } = await ready(r);
+    const clause = doc.sections[0]!.clauses[0]!;
+    const edited = { ...doc, sections: [{ ...doc.sections[0]!, clauses: [{ ...clause, currentText: 'If adding throws, `add` rethrows.' }] }] };
+    const before = snapshot(repo);
+    const result = await api<SyncResult>(r, '/api/sync', { doc: edited, mode: 'run' });
+    assert.equal(result.ok, false);
+    assert.equal(result.summary, `Codex exited with code 1 after changing 0 files. ${reason}`);
+    assert.deepEqual(changedPaths(before, snapshot(repo)), []);
+  } finally {
+    await r.stop();
+  }
+});
+
+test('with neither agent ready, or asking for one that is not, redline exits with one calm line', async () => {
+  const repo = makeRepo();
+  const none = await runCli(['--no-open'], { cwd: repo, env: { PATH: isolatedPath() } });
+  assert.equal(none.code, 1);
+  assert.match(none.out, /No logged-in agent found\. Log in to Claude Code \("claude auth login"\) or the Codex CLI \("codex login"\)/);
+  assert.doesNotMatch(none.out, /at .*\.js:\d+/, 'no stack trace');
+
+  const loggedOut = fakeClaude(SPEC, { loggedIn: false });
+  fakeCodex(SPEC, { binDir: loggedOut.binDir, loggedIn: false });
+  const bothOut = await runCli(['--no-open'], { cwd: repo, env: { PATH: isolatedPath(loggedOut.binDir) } });
+  assert.match(bothOut.out, /No logged-in agent found/);
+  const codexOut = await runCli(['codex', '--no-open'], { cwd: repo, env: { PATH: isolatedPath(loggedOut.binDir) } });
+  assert.equal(codexOut.code, 1);
+  assert.match(codexOut.out, /Codex CLI is not logged in\. Run "codex login" and try again\./);
+
+  const { binDir } = fakeClaude(SPEC);
+  const missing = await runCli(['codex', '--no-open'], { cwd: repo, env: { PATH: isolatedPath(binDir) } });
+  assert.match(missing.out, /Codex CLI is not installed/);
+  const unknown = await runCli(['--no-open'], { cwd: repo, env: { PATH: isolatedPath(binDir), REDLINE_AGENT: 'gemini' } });
+  assert.match(unknown.out, /REDLINE_AGENT must be claude or codex/);
+});
+
+test('Claude logged out falls back to Codex without a word; `redline claude` then says how to log in', async () => {
+  const repo = makeRepo();
+  const claude = fakeClaude(SPEC, { loggedIn: false });
+  fakeCodex(SPEC, { binDir: claude.binDir });
+  const env = { XDG_CACHE_HOME: tempDir('cache'), PATH: isolatedPath(claude.binDir) };
+  const r = await boot([], { cwd: repo, env });
+  try {
+    const { session } = await ready(r);
+    assert.equal(session.activeAgent, 'codex');
+    assert.deepEqual(session.providers.claude, { installed: true, loggedIn: false });
+    assert.doesNotMatch(r.output(), /not logged in/i, 'no complaint about the fallback');
+  } finally {
+    await r.stop();
+  }
+  const asked = await runCli(['claude', '--no-open'], { cwd: repo, env });
+  assert.equal(asked.code, 1);
+  assert.match(asked.out, /Claude Code is not logged in\. Run "claude auth login" and try again\./);
+});
+
+test('with both ready: Claude by default, `redline codex 7`-style positionals pick Codex, and each Run names its agent', async () => {
+  const repo = makeRepo();
+  const claude = fakeClaude(SPEC);
+  const codex = fakeCodex(SPEC, { binDir: claude.binDir });
+  const env = { XDG_CACHE_HOME: tempDir('cache'), PATH: isolatedPath(claude.binDir) };
+
+  // --model is for the launch agent: Claude gets it; a Codex run never sees a Claude model name.
+  const r = await boot(['--model', 'opus'], { cwd: repo, env });
+  try {
+    const { doc, session } = await ready(r);
+    assert.equal(session.activeAgent, 'claude');
+    assert.deepEqual(session.providers, { claude: { installed: true, loggedIn: true }, codex: { installed: true, loggedIn: true } });
+    assert.equal(session.model, 'opus');
+    assert.equal(after(readCalls(claude.logFile)[0]!.args, '--model'), 'opus');
+    assert.equal(codexCalls(codex.logFile).length, 0);
+
+    const clause = doc.sections[0]!.clauses[0]!;
+    const edited = { ...doc, sections: [{ ...doc.sections[0]!, clauses: [{ ...clause, currentText: 'If adding throws, `add` rethrows.' }] }] };
+    const result = await api<SyncResult>(r, '/api/sync', { doc: edited, mode: 'run', agent: 'codex' });
+    assert.equal(result.agent?.name, 'codex');
+    const sync = codexCalls(codex.logFile).at(-1)!;
+    assert.equal(sync.args.includes('--model'), false);
+    assert.equal(readCalls(claude.logFile).length, 1, 'Claude only wrote the spec');
+    assert.equal((await rawPost(r, '/api/sync', { doc: edited, mode: 'run', agent: 'gemini' })).status, 400);
+    assert.equal((await rawPost(r, '/api/agent', { agent: 'codex' })).status, 404, 'no session-wide switch any more');
+  } finally {
+    await r.stop();
+  }
+
+  const asked = await boot(['codex'], { cwd: repo, env });
+  try {
+    const { session } = await ready(asked);
+    assert.equal(session.activeAgent, 'codex');
+    assert.equal(session.model, 'Codex default model');
+  } finally {
+    await asked.stop();
+  }
+});
+
+test('one Sync at a time, across both agents: an overlapping request is a 409, and the lock is released after', async () => {
+  const repo = makeRepo();
+  const claude = fakeClaude(SPEC, { syncDelayMs: 800 });
+  fakeCodex(SPEC, { binDir: claude.binDir });
+  const r = await boot([], { cwd: repo, env: { XDG_CACHE_HOME: tempDir('cache'), PATH: isolatedPath(claude.binDir) } });
+  try {
+    const { doc } = await ready(r);
+    const clause = doc.sections[0]!.clauses[0]!;
+    const edited = { ...doc, sections: [{ ...doc.sections[0]!, clauses: [{ ...clause, currentText: 'If adding throws, `add` rethrows.' }] }] };
+    const first = rawPost(r, '/api/sync', { doc: edited, mode: 'run', agent: 'claude' });
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    const [sameAgent, otherAgent] = await Promise.all([
+      rawPost(r, '/api/sync', { doc: edited, mode: 'run', agent: 'claude' }),
+      rawPost(r, '/api/sync', { doc: edited, mode: 'run', agent: 'codex' }),
+    ]);
+    for (const res of [sameAgent, otherAgent]) {
+      assert.equal(res.status, 409);
+      assert.deepEqual(JSON.parse(res.body), { error: 'Sync already in progress' });
+    }
+    assert.equal((await rawPost(r, '/api/load', { target: { kind: 'current' } })).status, 409, 'nor can the spec reload under it');
+    const done = await first;
+    assert.equal(done.status, 200);
+    assert.equal((JSON.parse(done.body) as SyncResult).ok, true);
+
+    // Released: the next request isn't refused for being concurrent (this one is refused as stale instead).
+    const later = await rawPost(r, '/api/sync', { doc: edited, mode: 'run', agent: 'codex' });
+    assert.equal(later.status, 409);
+    assert.match(JSON.parse(later.body).error as string, /already applied/);
+  } finally {
+    await r.stop();
+  }
+});
+
+test('the lock is released when the agent fails, too', async () => {
+  const repo = makeRepo();
+  const { binDir } = fakeCodex(SPEC, { failSync: 'boom' });
+  const r = await boot([], { cwd: repo, env: { XDG_CACHE_HOME: tempDir('cache'), PATH: isolatedPath(binDir) } });
+  try {
+    const { doc } = await ready(r);
+    const clause = doc.sections[0]!.clauses[0]!;
+    const edited = { ...doc, sections: [{ ...doc.sections[0]!, clauses: [{ ...clause, currentText: 'If adding throws, `add` rethrows.' }] }] };
+    for (let i = 0; i < 2; i++) {
+      const res = await rawPost(r, '/api/sync', { doc: edited, mode: 'run' });
+      assert.equal(res.status, 200, `run ${i + 1} is not locked out: ${res.body}`);
+      assert.equal((JSON.parse(res.body) as SyncResult).ok, false);
+    }
   } finally {
     await r.stop();
   }

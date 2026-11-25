@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, relative } from 'node:path';
 
@@ -73,13 +73,18 @@ export function changedPaths(before: Map<string, string>, after: Map<string, str
  * "edit" src/app.js by appending a line, like a real edit. Every invocation's argv and
  * stdin are logged to `logFile` for assertions. `syncDelayMs` holds a sync run open.
  */
-export function fakeClaude(specJson: unknown, opts: { failSpec?: string; syncDelayMs?: number } = {}): { binDir: string; logFile: string } {
-  const binDir = tempDir('bin');
+export function fakeClaude(specJson: unknown, opts: { failSpec?: string; syncDelayMs?: number; loggedIn?: boolean; binDir?: string } = {}): { binDir: string; logFile: string } {
+  const binDir = opts.binDir ?? tempDir('bin');
   const logFile = join(binDir, 'calls.jsonl');
+  const loggedIn = opts.loggedIn !== false;
   const script = `#!/usr/bin/env node
 const fs = require('node:fs');
 const path = require('node:path');
 const args = process.argv.slice(2);
+if (args[0] === 'auth' && args[1] === 'status') {
+  process.stdout.write(JSON.stringify({ loggedIn: ${loggedIn}, authMethod: ${loggedIn ? "'claude.ai'" : "'none'"} }));
+  process.exit(${loggedIn ? 0 : 1});
+}
 const out = (event) => process.stdout.write(JSON.stringify(event) + '\\n');
 const tool = (name, input) => out({ type: 'assistant', message: { content: [{ type: 'tool_use', name, input }] } });
 let input = '';
@@ -105,6 +110,71 @@ process.stdin.on('end', () => {
   writeFileSync(path, script);
   chmodSync(path, 0o755);
   return { binDir, logFile };
+}
+
+/**
+ * A fake `codex` on PATH that speaks `codex exec --json`, logging each call to `logFile`
+ * like fakeClaude, plus whether the schema file existed at call time. Spec calls (with
+ * --output-schema) "read" src/app.js, send a progress note, then the answer as the last
+ * message and to the --output-last-message file. Sync calls edit src/app.js. `failSpec`
+ * (and `failSync`) fail the way Codex reports an API error.
+ */
+export function fakeCodex(specJson: unknown, opts: { failSpec?: string; failSync?: string; syncDelayMs?: number; loggedIn?: boolean; binDir?: string } = {}): { binDir: string; logFile: string } {
+  const binDir = opts.binDir ?? tempDir('bin');
+  const logFile = join(binDir, 'codex-calls.jsonl');
+  const script = `#!/usr/bin/env node
+const fs = require('node:fs');
+const path = require('node:path');
+const args = process.argv.slice(2);
+const out = (event) => process.stdout.write(JSON.stringify(event) + '\\n');
+const flag = (name) => (args.includes(name) ? args[args.indexOf(name) + 1] : undefined);
+if (args[0] === 'login' && args[1] === 'status') {
+  process.stdout.write(${opts.loggedIn !== false ? "'Logged in using ChatGPT\\n'" : "'Not logged in\\n'"});
+  process.exit(${opts.loggedIn !== false ? 0 : 1});
+}
+let input = '';
+process.stdin.on('data', (d) => (input += d));
+process.stdin.on('end', () => {
+  const schema = flag('--output-schema');
+  fs.appendFileSync(${JSON.stringify(logFile)}, JSON.stringify({ args, cwd: process.cwd(), input, schema: schema && fs.existsSync(schema) ? JSON.parse(fs.readFileSync(schema, 'utf8')) : null }) + '\\n');
+  out({ type: 'thread.started', thread_id: 'thread-1' });
+  out({ type: 'turn.started' });
+  if (schema) {
+    ${opts.failSpec ? `const m = JSON.stringify({ type: 'error', status: 400, error: { message: ${JSON.stringify(opts.failSpec)} } }); out({ type: 'error', message: m }); out({ type: 'turn.failed', error: { message: m } }); process.exit(1);` : ''}
+    const repo = /^Repository: (.+)$/m.exec(input)[1];
+    out({ type: 'item.completed', item: { id: 'item_0', type: 'agent_message', text: 'I will read src/app.js first.' } });
+    const command = '/bin/zsh -lc "sed -n \\'1,80p\\' ' + path.join(repo, 'src/app.js') + '"';
+    out({ type: 'item.started', item: { id: 'item_1', type: 'command_execution', command, aggregated_output: '', exit_code: null, status: 'in_progress' } });
+    out({ type: 'item.completed', item: { id: 'item_1', type: 'command_execution', command, aggregated_output: 'x', exit_code: 0, status: 'completed' } });
+    const answer = JSON.stringify(${JSON.stringify(specJson)});
+    fs.writeFileSync(flag('--output-last-message'), answer);
+    out({ type: 'item.completed', item: { id: 'item_2', type: 'agent_message', text: answer } });
+  } else {
+    ${opts.failSync ? `const m = JSON.stringify({ type: 'error', status: 400, error: { message: ${JSON.stringify(opts.failSync)} } }); out({ type: 'error', message: m }); out({ type: 'turn.failed', error: { message: m } }); process.exit(1);` : ''}
+    const file = path.join(process.cwd(), 'src/app.js');
+    out({ type: 'item.started', item: { id: 'item_1', type: 'file_change', changes: [{ path: file, kind: 'update' }], status: 'in_progress' } });
+    fs.appendFileSync(file, '// edited by fake codex\\n');
+    out({ type: 'item.completed', item: { id: 'item_1', type: 'file_change', changes: [{ path: file, kind: 'update' }], status: 'completed' } });
+    out({ type: 'item.completed', item: { id: 'item_2', type: 'agent_message', text: 'Change 1: edited src/app.js' } });
+  }
+  setTimeout(() => out({ type: 'turn.completed', usage: {} }), schema ? 0 : ${opts.syncDelayMs ?? 0});
+});
+`;
+  const path = join(binDir, 'codex');
+  writeFileSync(path, script);
+  chmodSync(path, 0o755);
+  return { binDir, logFile };
+}
+
+/**
+ * A PATH with only `dirs` plus node and git: no real claude, codex or gh can leak in.
+ * Node goes in its own directory so a fake's `#!/usr/bin/env node` works.
+ */
+export function isolatedPath(...dirs: string[]): string {
+  const tools = tempDir('tools');
+  symlinkSync(process.execPath, join(tools, 'node'));
+  symlinkSync(execFileSync('/usr/bin/which', ['git'], { encoding: 'utf8' }).trim(), join(tools, 'git'));
+  return [...dirs, tools, '/usr/bin', '/bin'].join(':');
 }
 
 export function readCalls(logFile: string): { args: string[]; cwd: string; input: string }[] {

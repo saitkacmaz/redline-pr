@@ -7,11 +7,13 @@ interface Props {
   comments: MarginComment[];
   /** Its sentence is hovered or focused. */
   linked?: boolean;
+  /** Shown under its sentence (narrow windows), where the surrounding hairline already marks it. */
+  inline?: boolean;
   onReply: (commentId: string, text: string) => void;
   onStatus: (commentId: string, status: MarginComment['status']) => void;
 }
 
-const BODY = 'whitespace-pre-line text-[14px] leading-[1.55] text-ink/90';
+const BODY = 'whitespace-pre-line text-[14px] leading-[1.55] text-ink/90 [overflow-wrap:anywhere]';
 const plural = (n: number, one: string, many: string): string => `${n} ${n === 1 ? one : many}`;
 
 function Reply({ reply, clamp, ref }: { reply: ThreadReply; clamp: boolean; ref?: React.Ref<HTMLParagraphElement> }) {
@@ -29,7 +31,7 @@ function Reply({ reply, clamp, ref }: { reply: ThreadReply; clamp: boolean; ref?
  * One thread, kept compact: the opening comment and the latest reply, each clamped,
  * with a plain toggle to read the whole thread in place.
  */
-function Comment({ comment, linked, onReply, onStatus }: { comment: MarginComment; linked: boolean } & Omit<Props, 'comments' | 'linked'>) {
+function Comment({ comment, linked, inline, onReply, onStatus }: { comment: MarginComment; linked: boolean } & Omit<Props, 'comments' | 'linked'>) {
   const [open, setOpen] = useState(false);
   const [clamped, setClamped] = useState(false);
   const body = useRef<HTMLParagraphElement>(null);
@@ -49,11 +51,15 @@ function Comment({ comment, linked, onReply, onStatus }: { comment: MarginCommen
 
   return (
     <div
-      className={`group/comment border-l pl-4 transition-colors duration-150 ${linked ? 'border-ink' : 'border-transparent hover:border-rule'} focus-within:border-ink/70`}
+      className={
+        inline
+          ? 'group/comment min-w-0'
+          : `group/comment min-w-0 border-l pl-4 transition-colors duration-150 ${linked ? 'border-ink' : 'border-transparent hover:border-rule'} focus-within:border-ink/70`
+      }
     >
-      <div className="flex items-baseline gap-2 text-[13.5px]">
+      <div className="flex min-w-0 flex-wrap items-baseline gap-x-2 text-[13.5px]">
         <span className="font-semibold text-ink">@{comment.author}</span>
-        {where && <span className="font-mono text-[11.5px] text-muted">{where}</span>}
+        {where && <span className="min-w-0 font-mono text-[11.5px] text-muted [overflow-wrap:anywhere]">{where}</span>}
         {comment.replied && (
           <span className="text-[12px] text-muted" title="You replied last; waiting on the reviewer.">
             replied
@@ -89,7 +95,7 @@ function Comment({ comment, linked, onReply, onStatus }: { comment: MarginCommen
       <button
         type="button"
         aria-pressed={pushedBack}
-        title="Claude Code will be told not to act on this comment."
+        title="The agent will be told not to act on this comment."
         onClick={() => onStatus(comment.id, pushedBack ? 'open' : 'pushed_back')}
         className={`mt-1.5 cursor-pointer text-[12px] hover:text-ink focus-visible:opacity-100 ${
           pushedBack ? 'text-ink' : 'text-muted opacity-0 transition-opacity duration-150 group-hover/comment:opacity-100 group-focus-within/comment:opacity-100'
@@ -101,12 +107,12 @@ function Comment({ comment, linked, onReply, onStatus }: { comment: MarginCommen
   );
 }
 
-export function Margin({ comments, linked = false, onReply, onStatus }: Props) {
+export function Margin({ comments, linked = false, inline = false, onReply, onStatus }: Props) {
   if (comments.length === 0) return null;
   return (
     <div className="space-y-6">
       {comments.map((c) => (
-        <Comment key={c.id} comment={c} linked={linked} onReply={onReply} onStatus={onStatus} />
+        <Comment key={c.id} comment={c} linked={linked} inline={inline} onReply={onReply} onStatus={onStatus} />
       ))}
     </div>
   );
@@ -131,7 +137,7 @@ export function HiddenThreads({ threads }: { threads: HiddenThread[] }) {
                 {t.reason}
                 {t.replyCount > 0 ? ` · ${plural(t.replyCount, 'reply', 'replies')}` : ''}
               </span>
-              <p className="mt-0.5 line-clamp-3 whitespace-pre-line">{t.body}</p>
+              <p className="mt-0.5 line-clamp-3 whitespace-pre-line [overflow-wrap:anywhere]">{t.body}</p>
             </li>
           ))}
         </ul>

@@ -67,6 +67,21 @@ export interface SpecDocument {
 
 /* ---- API contract (server <-> web) ---- */
 
+/** The local coding-agent CLIs redline can drive. */
+export const AGENT_NAMES = ['claude', 'codex'] as const;
+export type AgentName = (typeof AGENT_NAMES)[number];
+/** The product, for sentences. */
+export const AGENT_LABEL: Record<AgentName, string> = { claude: 'Claude Code', codex: 'Codex' };
+/** For the Run button and the switch: "Run with Claude". */
+export const AGENT_SHORT: Record<AgentName, string> = { claude: 'Claude', codex: 'Codex' };
+
+/** Whether an agent CLI can run here: on PATH, and logged in with its own login. */
+export interface ProviderStatus {
+  installed: boolean;
+  loggedIn: boolean;
+}
+export type ProviderStatuses = Record<AgentName, ProviderStatus>;
+
 export interface SessionInfo {
   /** Repository root, with the home directory shortened to ~. */
   repo: string;
@@ -74,9 +89,14 @@ export interface SessionInfo {
   branch: string;
   demo: boolean;
   dryRun: boolean;
+  /** The model the launch agent was asked for, or its CLI's default. */
   model: string;
   /** Out-of-repo directory where plans, exports, and caches are written. */
   artifactDir: string;
+  /** Picked at launch: writes the spec, and is the primary Run button. */
+  activeAgent: AgentName;
+  /** Each agent CLI's install and login state (as of launch, or the last Refresh). */
+  providers: ProviderStatuses;
 }
 
 /** What the server has loaded right now. */
@@ -174,7 +194,7 @@ export interface SyncPlan {
   replies: ReplyDraft[];
   targetFiles: string[];
   specDiff: string; // plain-text spec.diff
-  prompt: string; // exact prompt that would be piped to `claude -p`
+  prompt: string; // exact prompt that would be piped to `claude -p` or `codex exec`
   markdown: string; // redline-sync.md export
 }
 
@@ -183,6 +203,8 @@ export type SyncMode = 'run' | 'export';
 export interface SyncRequest {
   doc: SpecDocument;
   mode: SyncMode;
+  /** Which agent runs it; the launch agent when omitted. */
+  agent?: AgentName;
 }
 
 /** Post the user's written replies. Separate from running code changes, and never automatic. */
@@ -197,7 +219,7 @@ export interface PostedReply {
   error?: string;
 }
 
-/** What Claude Code changed in the working tree during a run. */
+/** What the agent changed in the working tree during a run. */
 export interface WorkingTreeChange {
   /** Paths whose contents changed (tracked) or that appeared (untracked). */
   files: string[];
@@ -211,11 +233,15 @@ export interface SyncResult {
   summary: string;
   ok: boolean;
   writtenFile?: string;
-  claude?: {
+  /** The agent that ran, when one did. */
+  agent?: {
+    name: AgentName;
     exitCode: number;
     output: string;
-    /** The saved Claude Code session; `claude --resume <id>` in the repo picks it up. */
+    /** The saved session id. */
     sessionId?: string;
+    /** Continues that session in a terminal: `cd <repo> && claude --resume <id>` (or `codex resume <id>`). */
+    resume?: string;
   };
   changes?: WorkingTreeChange;
   elapsedMs?: number;

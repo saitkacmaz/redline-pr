@@ -2,7 +2,7 @@ import { after, before, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Browser, chromePath } from './browser.js';
 import { boot, type Running } from './cli-harness.js';
-import { tempDir } from './helpers.js';
+import { fakeClaude, fakeCodex, isolatedPath, makeRepo, tempDir } from './helpers.js';
 
 /** The rendered sentences on the page (the focusable view spans). */
 const SENTENCES = `[...document.querySelectorAll('main p > span[tabindex="0"]')]`;
@@ -14,7 +14,10 @@ describe('editing in the browser (demo)', { skip: chromePath ? false : 'no Chrom
   let page: Browser;
 
   before(async () => {
-    server = await boot(['--demo'], { cwd: tempDir('ui'), env: { XDG_CACHE_HOME: tempDir('cache') } });
+    // Both agents "installed" (as fakes the demo never runs), so the Sync view offers the switch.
+    const { binDir } = fakeClaude({});
+    fakeCodex({}, { binDir });
+    server = await boot(['--demo'], { cwd: tempDir('ui'), env: { XDG_CACHE_HOME: tempDir('cache'), PATH: isolatedPath(binDir) } });
     page = await Browser.launch();
   });
   after(async () => {
@@ -107,7 +110,7 @@ describe('editing in the browser (demo)', { skip: chromePath ? false : 'no Chrom
     assert.equal(await page.eval<string>(`document.querySelector('[data-view=sync] textarea').value`), 'Agreed, switching to 502.', 'the margin reply shows in the sheet');
     assert.match(sheet, /Posting is off in the demo/);
     assert.doesNotMatch(sheet, /Updated so that/);
-    assert.equal(await page.eval<boolean>(`[...document.querySelectorAll('[data-view=sync] button')].find((b) => b.textContent === 'Run with Claude Code').disabled`), true);
+    assert.equal(await page.eval<boolean>(`[...document.querySelectorAll('[data-view=sync] button')].find((b) => b.textContent === 'Run with Claude').disabled`), true);
     assert.equal(await page.eval<boolean>(`document.querySelector('[data-clause]').closest('[hidden]') !== null`), true, 'the spec is out of view, not under an overlay');
     assert.equal(await page.eval<string>('location.hash'), '#sync');
 
@@ -126,8 +129,8 @@ describe('editing in the browser (demo)', { skip: chromePath ? false : 'no Chrom
     await page.type(' Unless nothing was ingested.');
     await page.key('Enter');
     await page.clickEl(`[...document.querySelectorAll('header button')].find((b) => b.textContent === 'Sync')`);
-    await page.waitFor(`[...document.querySelectorAll('[data-view=sync] button')].find((b) => b.textContent === 'Run with Claude Code' && !b.disabled)`);
-    await page.clickEl(`[...document.querySelectorAll('[data-view=sync] button')].find((b) => b.textContent === 'Run with Claude Code')`);
+    await page.waitFor(`[...document.querySelectorAll('[data-view=sync] button')].find((b) => b.textContent === 'Run with Claude' && !b.disabled)`);
+    await page.clickEl(`[...document.querySelectorAll('[data-view=sync] button')].find((b) => b.textContent === 'Run with Claude')`);
     await page.waitFor(`document.querySelector('[data-view=sync]').innerText.includes('Demo mode: wrote the plan')`);
 
     // The run is done, so the next step is right there: re-analyze, in place.
@@ -142,6 +145,116 @@ describe('editing in the browser (demo)', { skip: chromePath ? false : 'no Chrom
       true,
       'the hairline settles to a solid ink line when the reload is done',
     );
+  });
+
+  test('Sync offers Run with Claude (solid) and Run with Codex (outline); a click locks both at once', async () => {
+    await fresh();
+    await page.clickEl(sentence('always returns HTTP 200'));
+    await page.waitFor(TEXTBOX);
+    await page.type(' Unless nothing was ingested.');
+    await page.key('Enter');
+    await page.clickEl(`[...document.querySelectorAll('header button')].find((b) => b.textContent === 'Sync')`);
+    const RUNS = `[...document.querySelectorAll('[data-view=sync] button[data-agent]')]`;
+    await page.waitFor(`${RUNS}.length === 2 && ${RUNS}.every((b) => !b.disabled)`);
+    assert.equal(await page.eval<string>(`${RUNS}.map((b) => b.textContent).join(' | ')`), 'Run with Claude | Run with Codex');
+    const look = `${RUNS}.map((b) => { const c = getComputedStyle(b); return [c.backgroundColor, c.color, c.borderTopColor, c.borderTopWidth, c.boxShadow].join(' '); })`;
+    const [claude, codex] = await page.eval<string[]>(look);
+    assert.match(claude ?? '', /^rgb\(20, 20, 19\) rgb\(252, 252, 251\) .* none$/, 'primary: flat ink, paper text, no shadow');
+    assert.equal(codex, 'rgb(252, 252, 251) rgb(20, 20, 19) rgb(212, 212, 208) 1px none', 'secondary: paper, ink text, 1px #D4D4D0 outline');
+    assert.equal(await page.eval<boolean>(`${RUNS}.every((b) => !b.title && !b.querySelector('svg, img'))`), true, 'no titles or icons when both are usable');
+    assert.equal(
+      await page.eval<string>(`[...document.querySelectorAll('[data-view=sync] button')].find((b) => b.textContent === 'Copy spec diff').className.includes('border')`),
+      false,
+      'Copy spec diff is a quiet text link',
+    );
+
+    // Two clicks in the same instant (before React can re-render): the second is ignored, so
+    // only Codex starts; once React has applied the click, both buttons are off.
+    const afterClick = await page.eval<string>(
+      `(async () => { const runs = ${RUNS}; runs[1].click(); runs[0].click(); await new Promise((r) => setTimeout(r, 0)); return ${RUNS}.map((b) => b.textContent + ':' + b.disabled).join(' | '); })()`,
+    );
+    assert.equal(afterClick, 'Run with Claude:true | Running Codex…:true');
+    await page.waitFor(`document.querySelector('[data-view=sync]').innerText.includes('instead of running Codex')`);
+
+    const reanalyze = `[...document.querySelectorAll('[data-view=sync] button')].find((b) => b.textContent === 'Re-analyze diff')`;
+    await page.waitFor(reanalyze);
+    await page.clickEl(reanalyze);
+    await page.waitFor(`!document.querySelector('[data-view=sync]')`);
+  });
+
+  test('responsive: fixed columns, fluid columns, then one column with inline hairline comments; never a sideways scroll', async () => {
+    await fresh();
+    const measure = `(() => {
+      const box = (el) => el.getBoundingClientRect();
+      const rail = document.querySelector('[data-for]').parentElement;
+      const railOn = getComputedStyle(rail).display !== 'none';
+      const notes = railOn
+        ? [...rail.querySelectorAll('[data-for]')].map((n) => ({ top: box(n).top, bottom: box(n).bottom, want: box(document.querySelector('[data-clause="' + n.dataset.for + '"]')).top })).sort((a, b) => a.top - b.top)
+        : [];
+      const inline = [...document.querySelectorAll('[data-clause] aside')].filter((a) => getComputedStyle(a).display !== 'none');
+      const sync = [...document.querySelectorAll('header button')].find((b) => b.textContent === 'Sync');
+      const prose = document.querySelector('[data-clause]').closest('section').parentElement;
+      return {
+        overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+        railOn,
+        proseWidth: Math.round(box(prose).width),
+        railWidth: railOn ? Math.round(box(rail).width) : 0,
+        aligned: notes.every((n) => n.top >= n.want - 1),
+        overlap: notes.some((n, i) => i > 0 && n.top < notes[i - 1].bottom),
+        inline: inline.length,
+        inlineBorder: inline[0] ? getComputedStyle(inline[0]).borderLeft : '',
+        syncVisible: box(sync).right <= innerWidth,
+      };
+    })()`;
+    type M = { overflow: number; railOn: boolean; proseWidth: number; railWidth: number; aligned: boolean; overlap: boolean; inline: number; inlineBorder: string; syncVisible: boolean };
+    const at = async (width: number, height: number): Promise<M> => {
+      await page.send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile: false });
+      // One frame for the resize, one for the rAF-batched note placement.
+      await page.eval('new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))');
+      return page.eval<M>(measure);
+    };
+    try {
+      // The same page, resized, without a reload: notes must follow their sentences.
+      const wide = await at(1440, 900);
+      assert.deepEqual([wide.overflow, wide.railOn, wide.proseWidth, wide.railWidth, wide.aligned, wide.overlap, wide.inline], [0, true, 680, 340, true, false, 0]);
+      const between = await at(1024, 480);
+      assert.equal(between.overflow, 0, 'the old fixed 1120px grid overflowed here');
+      const split = await at(960, 800);
+      assert.deepEqual([split.overflow, split.railOn, split.aligned, split.overlap], [0, true, true, false]);
+      assert.equal(split.railWidth, 300);
+      assert.equal(split.proseWidth, 960 - 48 - 32 - 300, 'the prose takes the rest');
+      const edge = await at(860, 800);
+      assert.deepEqual([edge.overflow, edge.railOn, edge.railWidth, edge.aligned], [0, true, 300, true]);
+      const narrow = await at(600, 700);
+      assert.deepEqual([narrow.overflow, narrow.railOn, narrow.inline, narrow.syncVisible], [0, false, 3, true]);
+      assert.equal(narrow.inlineBorder, '2px solid rgb(230, 230, 227)');
+      const phone = await at(360, 700);
+      assert.deepEqual([phone.overflow, phone.syncVisible], [0, true]);
+      const back = await at(1440, 900);
+      assert.deepEqual([back.railOn, back.aligned, back.overlap, back.inline], [true, true, false, 0], 'and back again');
+    } finally {
+      await page.send('Emulation.clearDeviceMetricsOverride', {});
+    }
+  });
+
+  test('on a short pane the PR list stays inside the window and scrolls within itself', async () => {
+    await fresh();
+    await page.send('Emulation.setDeviceMetricsOverride', { width: 1024, height: 300, deviceScaleFactor: 1, mobile: false });
+    try {
+      const trigger = `document.querySelector('header button[aria-haspopup=menu]')`;
+      await page.clickEl(trigger);
+      await page.waitFor(`document.querySelector('[role=menu]')`);
+      const menu = await page.eval<{ bottom: number; right: number; overflowY: string; maxHeight: string }>(
+        `(() => { const m = document.querySelector('[role=menu]'); const b = m.getBoundingClientRect(); const c = getComputedStyle(m); return { bottom: b.bottom, right: b.right, overflowY: c.overflowY, maxHeight: c.maxHeight }; })()`,
+      );
+      assert.ok(menu.bottom <= 300, `menu ends at ${menu.bottom}`);
+      assert.ok(menu.right <= 1024);
+      assert.equal(menu.overflowY, 'auto');
+      assert.equal(menu.maxHeight, '228px', '100dvh - 72px');
+      await page.key('Escape');
+    } finally {
+      await page.send('Emulation.clearDeviceMetricsOverride', {});
+    }
   });
 
   test('the PR title opens a quiet switcher; Escape closes it and returns focus', async () => {
@@ -251,5 +364,40 @@ describe('editing in the browser (demo)', { skip: chromePath ? false : 'no Chrom
 
   test('the page logs no errors', () => {
     assert.deepEqual(page.errors, []);
+  });
+});
+
+describe('an agent that is not logged in (real repo)', { skip: chromePath ? false : 'no Chrome/Chromium found' }, () => {
+  test('its Run button is visibly off, with the reason in a native title', async () => {
+    const spec = {
+      sections: [{ title: 'Addition', clauses: [{ id: 's1-c1', text: 'If adding throws, `add` returns 0.', anchors: [{ file: 'src/app.js', startLine: 2, endLine: 5 }], riskFlag: null }] }],
+      commentMap: [],
+    };
+    const { binDir } = fakeClaude(spec);
+    fakeCodex(spec, { binDir, loggedIn: false });
+    const server = await boot([], { cwd: makeRepo(), env: { XDG_CACHE_HOME: tempDir('cache'), PATH: isolatedPath(binDir) } });
+    const page = await Browser.launch();
+    try {
+      await page.goto(server.url);
+      await page.waitFor(`${SENTENCES}.length > 0`);
+      await page.clickEl(sentence('returns 0'));
+      await page.waitFor(TEXTBOX);
+      await page.type(' Or rethrows.');
+      await page.key('Enter');
+      await page.clickEl(`[...document.querySelectorAll('header button')].find((b) => b.textContent === 'Sync')`);
+      const codex = `document.querySelector('[data-view=sync] button[data-agent=codex]')`;
+      await page.waitFor(`${codex} && !document.querySelector('[data-view=sync] button[data-agent=claude]').disabled`);
+      assert.equal(await page.eval<boolean>(`${codex}.disabled`), true);
+      assert.equal(await page.eval<string>(`${codex}.title`), 'Codex CLI not logged in');
+      assert.equal(
+        await page.eval<string>(`(() => { const c = getComputedStyle(${codex}); return [c.color, c.borderTopColor, c.cursor].join(' '); })()`),
+        'rgb(163, 163, 158) rgb(230, 230, 227) not-allowed',
+      );
+      assert.equal(await page.eval<string>(`document.querySelector('[data-view=sync] button[data-agent=claude]').textContent`), 'Run with Claude');
+      assert.doesNotMatch(await page.eval<string>(`document.querySelector('[data-view=sync]').innerText`), /not logged in/, 'no banner: the title says it');
+    } finally {
+      await page.close();
+      await server.stop();
+    }
   });
 });

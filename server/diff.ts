@@ -63,7 +63,9 @@ function pathFromGitHeader(line: string): string {
  * counts, so content lines that look like headers (an added "++ x" renders as
  * "+++ x") are never mistaken for file boundaries.
  */
-export function parseUnifiedDiff(diff: string): ParsedFile[] {
+export function parseUnifiedDiff(raw: string): ParsedFile[] {
+  // Git on Windows (or a CRLF file) gives \r\n; a stray \r would end up in paths and line text.
+  const diff = raw.replace(/\r\n/g, '\n');
   const files: ParsedFile[] = [];
   let file: ParsedFile | undefined;
   let hunk: { header: RegExpExecArray; lines: string[]; oldLeft: number; newLeft: number } | undefined;

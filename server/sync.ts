@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type {
+  AgentName,
   PostedReply,
   PushBack,
   ReplyDraft,
@@ -12,57 +13,30 @@ import type {
   SyncResult,
 } from '../shared/types.js';
 import type { Tracker } from './activity.js';
-import { claudeStream } from './claude-stream.js';
-import { run } from './exec.js';
+import type { AgentProvider } from './providers/types.js';
+import { shellPath } from './platform.js';
 import { changesBetween, treeState } from './git.js';
 import { postReplies } from './github.js';
 import { buildSyncPrompt } from './prompts.js';
 
+export { splitFlags } from './providers/steps.js';
+
 export interface SyncContext {
-  /** Repository root; `claude -p` and `gh` run here. redline itself never writes here. */
+  /** Repository root; the agent and `gh` run here. redline itself never writes here. */
   workDir: string;
   /** Out-of-repo directory for sync plans and exports (see paths.ts). */
   artifactDir: string;
   demo: boolean;
   dryRun: boolean;
   canPostReplies: boolean;
+  /** Runs the edits. */
+  agent: AgentProvider;
+  model?: string;
 }
 
-const CLAUDE_TIMEOUT_MS = 30 * 60 * 1000;
+const RUN_TIMEOUT_MS = 30 * 60 * 1000;
 
 const normalize = (text: string): string => text.replace(/\s+/g, ' ').trim();
-
-/** Split REDLINE_CLAUDE_FLAGS like a shell would for quoting, e.g. --allowedTools "Bash(npm test)". */
-export function splitFlags(raw: string): string[] {
-  const out: string[] = [];
-  let current = '';
-  let quote: '"' | "'" | null = null;
-  let started = false;
-  for (const ch of raw) {
-    if (quote) {
-      if (ch === quote) quote = null;
-      else current += ch;
-    } else if (ch === '"' || ch === "'") {
-      quote = ch;
-      started = true;
-    } else if (/\s/.test(ch)) {
-      if (started || current) out.push(current);
-      current = '';
-      started = false;
-    } else {
-      current += ch;
-    }
-  }
-  if (quote) throw new Error(`REDLINE_CLAUDE_FLAGS has an unclosed ${quote} quote.`);
-  if (started || current) out.push(current);
-  return out;
-}
-
-function claudeFlags(): string[] {
-  const raw = process.env.REDLINE_CLAUDE_FLAGS;
-  if (raw === undefined) return ['--permission-mode', 'acceptEdits'];
-  return splitFlags(raw);
-}
 
 function computeEntries(doc: SpecDocument): SpecDiffEntry[] {
   const entries: SpecDiffEntry[] = [];
@@ -135,7 +109,7 @@ ${replies}
 
 ## Execution prompt
 
-Pipe this to \`claude -p\` from the repo root:
+Pipe this to \`claude -p\` or \`codex exec -\` from the repo root:
 
 \`\`\`\`text
 ${plan.prompt}
@@ -195,16 +169,21 @@ async function writeArtifact(ctx: SyncContext, name: string, contents: string): 
   return path;
 }
 
-/** One Claude Code run at a time: a second click or tab must not apply the same edits twice. */
-let running = false;
-
-export const isSyncRunning = (): boolean => running;
-
 /** A request that conflicts with what redline is doing or has loaded (HTTP 409). */
 export class SyncBusyError extends Error {}
 
-/** Quote a path for a shell command the user will paste, only when it needs it. */
-export const shellQuote = (path: string): string => (/^[\w@%+=:,./~-]+$/.test(path) ? path : `'${path.replace(/'/g, `'\\''`)}'`);
+/**
+ * One run at a time, across both agents: a second click, tab, or the other agent's button
+ * must not edit the same files at once. Taken and checked synchronously, so two requests
+ * can't both get past it; always released in `finally`.
+ */
+let activeSyncAgent: AgentName | null = null;
+
+export const isSyncRunning = (): boolean => activeSyncAgent !== null;
+
+export function assertSyncFree(): void {
+  if (activeSyncAgent !== null) throw new SyncBusyError('Sync already in progress');
+}
 
 const plural = (n: number, word: string): string => `${n} ${word}${n === 1 ? '' : 's'}`;
 const seconds = (ms: number): string => `${Math.max(1, Math.round(ms / 1000))}s`;
@@ -225,53 +204,59 @@ export async function executeSync(doc: SpecDocument, mode: SyncMode, ctx: SyncCo
     return { mode, ok: false, summary: 'Nothing to run: no sentences were edited.' };
   }
 
-  if (ctx.demo || ctx.dryRun) {
-    const writtenFile = await writeArtifact(ctx, 'sync-plan.md', plan.markdown);
-    const why = ctx.demo ? 'Demo mode' : 'Dry run';
-    return { mode, ok: true, summary: `${why}: wrote the plan to ${writtenFile} instead of running Claude Code.`, writtenFile };
-  }
-
-  if (running) throw new SyncBusyError('Claude Code is already running for this spec.');
-  running = true;
+  const agent = ctx.agent;
+  assertSyncFree();
+  activeSyncAgent = agent.name;
   const started = Date.now();
-  const tracker = track?.();
+  let tracker: Tracker | undefined;
   try {
+    if (ctx.demo || ctx.dryRun) {
+      const writtenFile = await writeArtifact(ctx, 'sync-plan.md', plan.markdown);
+      const why = ctx.demo ? 'Demo mode' : 'Dry run';
+      return { mode, ok: true, summary: `${why}: wrote the plan to ${writtenFile} instead of running ${agent.label}.`, writtenFile };
+    }
+    tracker = track?.();
     const before = await treeState(ctx.workDir);
-    const stream = claudeStream(ctx.workDir, {
-      onStep: (step) => tracker?.step(step),
-      onLog: (line) => tracker?.log(line),
-    });
-    const res = await run('claude', ['-p', '--output-format', 'stream-json', '--verbose', ...claudeFlags()], {
-      cwd: ctx.workDir,
-      input: plan.prompt,
-      timeoutMs: CLAUDE_TIMEOUT_MS,
-      onStdout: (chunk) => stream.push(chunk),
-    });
-    const final = stream.result(res.stdout);
-    const sessionId = stream.sessionId();
-    const resume = sessionId ? `\n\nContinue this session: cd ${shellQuote(ctx.workDir)} && claude --resume ${sessionId}` : '';
+    const res = await agent.executeSync(
+      { prompt: plan.prompt, cwd: ctx.workDir, timeoutMs: RUN_TIMEOUT_MS, ...(ctx.model ? { model: ctx.model } : {}) },
+      { onStep: (step) => tracker?.step(step), onLog: (line) => tracker?.log(line) },
+    );
+    const resume = res.sessionId ? `cd ${shellPath(ctx.workDir)} && ${agent.resumeCommand(res.sessionId)}` : undefined;
+    // What changed is measured by redline, the same way for every agent, not taken from its report.
     const changes = await changesBetween(ctx.workDir, before, await treeState(ctx.workDir));
     const elapsedMs = Date.now() - started;
-    // Claude's closing message is the readable output; stderr only matters when something broke.
-    const output = [final?.result?.trim() ?? (final ? '' : res.stdout.trim()), res.stderr.trim()].filter(Boolean).join('\n\n');
-    const ok = res.code === 0 && final?.is_error !== true;
     const files = plural(changes.files.length, 'file');
     const summary = res.timedOut
-      ? `Claude Code was stopped after ${CLAUDE_TIMEOUT_MS / 60000} minutes. It changed ${files} before that.`
-      : ok
+      ? `${agent.label} was stopped after ${RUN_TIMEOUT_MS / 60000} minutes. It changed ${files} before that.`
+      : res.ok
         ? changes.files.length > 0
           ? `Synced — ${files} modified in ${seconds(elapsedMs)}`
-          : `Claude Code finished in ${seconds(elapsedMs)} without changing any files.`
-        : `Claude Code exited with code ${res.code} after changing ${files}.`;
-    if (ok) tracker?.done(summary);
-    else tracker?.fail(`${summary}${res.stderr.trim() ? ` ${res.stderr.trim().split('\n').at(-1)}` : ''}`);
-    await writeArtifact(ctx, 'last-run.md', `# ${summary}${resume}\n\n## Output\n\n${output}\n\n## Changes\n\n\`\`\`diff\n${changes.diff}\`\`\`\n`);
-    return { mode, ok, summary, claude: { exitCode: res.code, output, ...(sessionId ? { sessionId } : {}) }, changes, elapsedMs };
+          : `${agent.label} finished in ${seconds(elapsedMs)} without changing any files.`
+        : // The agent's own reason belongs in the result, not only in the status line that fades.
+          `${agent.label} exited with code ${res.exitCode} after changing ${files}.${res.error ? ` ${res.error}` : ''}`;
+    if (res.ok) tracker?.done(summary);
+    else tracker?.fail(summary);
+    const resumeNote = resume ? `\n\nContinue this session: ${resume}` : '';
+    await writeArtifact(ctx, 'last-run.md', `# ${summary}${resumeNote}\n\n## Output\n\n${res.output}\n\n## Changes\n\n\`\`\`diff\n${changes.diff}\`\`\`\n`);
+    return {
+      mode,
+      ok: res.ok,
+      summary,
+      agent: {
+        name: agent.name,
+        exitCode: res.exitCode,
+        output: res.output,
+        ...(res.sessionId ? { sessionId: res.sessionId } : {}),
+        ...(resume ? { resume } : {}),
+      },
+      changes,
+      elapsedMs,
+    };
   } catch (err) {
     tracker?.fail(err instanceof Error ? err.message : String(err));
     throw err;
   } finally {
-    running = false;
+    activeSyncAgent = null;
   }
 }
 

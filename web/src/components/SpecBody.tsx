@@ -1,5 +1,6 @@
 import { useLayoutEffect, useRef, useState } from 'react';
 import type { MarginComment, SpecDocument } from '../../../shared/types';
+import { COLUMNS, TWO_COLUMNS } from '../grid';
 import { layoutNotes } from '../layout';
 import type { Action } from '../state';
 import { Clause } from './Clause';
@@ -13,13 +14,12 @@ interface Props {
 }
 
 const GAP = 16;
-const WIDE = '(min-width: 1024px)';
 
 /**
  * The whole spec as one continuous column of sentences, with one margin beside it.
  * Notes are positioned against the prose (level with their sentence, cascading down
- * past each other), so nothing in the margin can ever open a gap in the text. On
- * narrow screens comments follow their sentence inline.
+ * past each other), so nothing in the margin can ever open a gap in the text. Below
+ * 860px comments follow their sentence inline, under a quiet hairline.
  */
 export function SpecBody({ doc, dispatch, onReply, onStatus }: Props) {
   const prose = useRef<HTMLDivElement>(null);
@@ -34,7 +34,7 @@ export function SpecBody({ doc, dispatch, onReply, onStatus }: Props) {
     const proseEl = prose.current;
     const railEl = rail.current;
     if (!proseEl || !railEl) return;
-    const wide = window.matchMedia(WIDE);
+    const wide = window.matchMedia(TWO_COLUMNS);
 
     const place = (): void => {
       if (!wide.matches) return;
@@ -50,15 +50,28 @@ export function SpecBody({ doc, dispatch, onReply, onStatus }: Props) {
       railEl.style.minHeight = `${Math.max(0, ...boxes.map((b, i) => (tops[i] ?? 0) + b.height))}px`;
     };
 
+    // At most once a frame: a window drag fires many resizes, and each placement reads the
+    // final layout of that frame (every sentence's new top), so notes don't drift or jitter.
+    let frame = 0;
+    const schedule = (): void => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(place);
+    };
+
     place();
-    // Re-place when a sentence is edited, a code peek opens, a thread expands, or the window resizes.
-    const observer = new ResizeObserver(place);
+    // Re-place when a sentence is edited, a code peek opens, a thread expands, or the window resizes
+    // (the prose reflows, the margin narrows, and notes change height).
+    const observer = new ResizeObserver(schedule);
     observer.observe(proseEl);
+    observer.observe(railEl);
     for (const note of railEl.querySelectorAll('[data-for]')) observer.observe(note);
-    wide.addEventListener('change', place);
+    wide.addEventListener('change', schedule);
+    window.addEventListener('resize', schedule);
     return () => {
+      cancelAnimationFrame(frame);
       observer.disconnect();
-      wide.removeEventListener('change', place);
+      wide.removeEventListener('change', schedule);
+      window.removeEventListener('resize', schedule);
     };
   }, [doc]);
 
@@ -70,8 +83,8 @@ export function SpecBody({ doc, dispatch, onReply, onStatus }: Props) {
   });
 
   return (
-    <div className="lg:grid lg:grid-cols-[680px_340px] lg:gap-x-[100px]">
-      <div ref={prose}>
+    <div className={COLUMNS}>
+      <div ref={prose} className="min-w-0 [overflow-wrap:break-word]">
         {doc.sections.map((section) => (
           <section key={section.id} className="mb-9">
             <h2 className="mb-4 text-[13px] font-semibold uppercase tracking-[0.07em] text-ink">{section.title}</h2>
@@ -87,8 +100,8 @@ export function SpecBody({ doc, dispatch, onReply, onStatus }: Props) {
                       onReset={() => dispatch({ type: 'resetClause', clauseId: clause.id })}
                     />
                     {own.length > 0 && (
-                      <aside className="mt-4 lg:hidden">
-                        <Margin comments={own} onReply={onReply} onStatus={onStatus} />
+                      <aside className="mt-4 border-l-2 border-rule pl-4 split:hidden">
+                        <Margin comments={own} inline onReply={onReply} onStatus={onStatus} />
                       </aside>
                     )}
                   </div>
@@ -98,7 +111,7 @@ export function SpecBody({ doc, dispatch, onReply, onStatus }: Props) {
           </section>
         ))}
       </div>
-      <div ref={rail} className="relative hidden lg:block">
+      <div ref={rail} className="relative hidden min-w-0 split:block">
         {noted.map((clause) => (
           <aside key={clause.id} data-for={clause.id} className="absolute inset-x-0 pt-0.5" {...link(clause.id)}>
             <Margin comments={byClause.get(clause.id) ?? []} linked={linked === clause.id} onReply={onReply} onStatus={onStatus} />

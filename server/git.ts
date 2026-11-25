@@ -229,6 +229,9 @@ export async function changesBetween(
 
   const scratch = await mkdtemp(join(tmpdir(), 'redline-run-'));
   try {
+    // An empty file stands in for "no file": /dev/null isn't a path on Windows.
+    const empty = join(scratch, 'empty');
+    await writeFile(empty, '');
     const patches: string[] = [];
     for (const path of changed) {
       const old = before.dirty.get(path);
@@ -237,14 +240,14 @@ export async function changesBetween(
       if (!old) {
         // Clean before the run, so its diff against HEAD is exactly this run's change.
         const tracked = await run('git', [...PLUMBING_DIFF, '--unified=3', 'HEAD', '--', `:(literal)${path}`], { cwd });
-        body = tracked.stdout.trim() ? hunksOnly(tracked.stdout) : await diffFiles(cwd, '/dev/null', now);
+        body = tracked.stdout.trim() ? hunksOnly(tracked.stdout) : await diffFiles(cwd, empty, now);
       } else if (old.hash !== null && old.content === null) {
         body = 'Changed (too large to show).\n';
       } else {
         const prior = join(scratch, 'before');
         await writeFile(prior, old.content ?? '');
         const exists = (await snap(cwd, path)).hash !== null;
-        body = await diffFiles(cwd, old.hash === null ? '/dev/null' : prior, exists ? now : '/dev/null');
+        body = await diffFiles(cwd, old.hash === null ? empty : prior, exists ? now : empty);
       }
       patches.push(`diff --git a/${path} b/${path}\n${body}`);
     }

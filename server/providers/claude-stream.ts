@@ -1,5 +1,7 @@
-import { isAbsolute, relative } from 'node:path';
 import { z } from 'zod';
+import { clip, underRoot, type StreamHandlers } from './steps.js';
+
+export type { StreamHandlers } from './steps.js';
 
 /** The final `result` event of `claude -p --output-format stream-json` (and the whole output of `--output-format json`). */
 export const ClaudeResultSchema = z.object({
@@ -11,30 +13,13 @@ export const ClaudeResultSchema = z.object({
 });
 export type ClaudeResult = z.infer<typeof ClaudeResultSchema>;
 
-export interface StreamHandlers {
-  /** A real step, worded for a person: "Reading src/app.js", "Running npm test". */
-  onStep?: (step: string) => void;
-  /** Everything worth showing in the raw log. */
-  onLog?: (line: string) => void;
-}
-
-const clip = (text: string, max = 72): string => {
-  const line = text.trim().split('\n')[0] ?? '';
-  return line.length > max ? `${line.slice(0, max - 1)}…` : line;
-};
-
 const str = (value: unknown): string => (typeof value === 'string' ? value : '');
 
 /** One honest sentence fragment for a tool call, with paths relative to the repo. */
 export function describeToolUse(name: string, input: Record<string, unknown>, root?: string): string {
   const path = (key: string): string => {
     const p = str(input[key]);
-    if (!p) return 'a file';
-    if (root && isAbsolute(p)) {
-      const rel = relative(root, p);
-      if (rel && !rel.startsWith('..') && !isAbsolute(rel)) return rel;
-    }
-    return p;
+    return p ? underRoot(p, root) : 'a file';
   };
   switch (name) {
     case 'Read':

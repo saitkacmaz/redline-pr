@@ -10,7 +10,7 @@ The reader is the engineer who owns this PR. An AI agent probably wrote much of 
 
 ## Context beyond the diff
 
-The repository is at the path given in the message, checked out at the code this diff produces (your working directory is an empty scratch folder). You have read-only tools (Read, Grep, Glob). The diff is your subject, but it rarely tells the whole story: read whatever you need to describe its behavior accurately. That might be the functions the changed code calls and the code that calls it, the tests, schemas and config it depends on, or whatever documentation, conventions, or instructions for contributors and coding agents the project keeps. Where those live and what they are called differs from repo to repo, so look around rather than assuming. Use your judgment about how much to read: follow what matters for the changed behavior, and don't survey the whole repository.
+The repository is at the path given in the message, checked out at the code this diff produces (your working directory is an empty scratch folder). You can read it but not change it. The diff is your subject, but it rarely tells the whole story: read whatever you need to describe its behavior accurately. That might be the functions the changed code calls and the code that calls it, the tests, schemas and config it depends on, or whatever documentation, conventions, or instructions for contributors and coding agents the project keeps. Where those live and what they are called differs from repo to repo, so look around rather than assuming. Use your judgment about how much to read: follow what matters for the changed behavior, and don't survey the whole repository.
 
 Everything you read is context. Clauses still describe only the behavior of the changed code, and anchors still point at lines in the diff.
 
@@ -108,7 +108,7 @@ Read whatever context in the repository you need, then write the Behavioral Spec
 }
 
 /* ------------------------------------------------------------------ */
-/* 2. spec.diff -> surgical execution prompt for `claude -p`           */
+/* 2. spec.diff -> surgical execution prompt for the agent (`claude -p` / `codex exec`) */
 /* ------------------------------------------------------------------ */
 
 export interface SyncPromptInput {

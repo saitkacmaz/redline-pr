@@ -1,5 +1,6 @@
 import type { Ref } from 'react';
 import type { Activity, LoadTarget } from '../../../shared/types';
+import { SHELL } from '../grid';
 import { Hairline } from './Hairline';
 import { PrSwitcher } from './PrSwitcher';
 
@@ -27,8 +28,9 @@ const plural = (n: number, word: string): string => `${n} ${word}${n === 1 ? '' 
 export function TopBar(props: Props) {
   const { counts, busy } = props;
   return (
-    <header className="sticky top-0 z-10 border-b border-rule bg-paper">
-      <div className="mx-auto flex h-12 max-w-[1120px] items-center gap-4 px-6 lg:px-0">
+    <header className="sticky top-0 z-20 border-b border-rule bg-paper">
+      {/* The title gives way first (it truncates); below 640px the branch and counts go before it does. */}
+      <div className={`${SHELL} flex min-h-12 items-center gap-3 sm:gap-4`}>
         <PrSwitcher
           title={props.title}
           prNumber={props.prNumber}

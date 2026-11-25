@@ -6,9 +6,10 @@ import { SpecBody } from './components/SpecBody';
 import { LogPeek, StatusLine } from './components/StatusLine';
 import { SyncView } from './components/SyncView';
 import { TopBar } from './components/TopBar';
+import { COLUMNS as ROW, SHELL } from './grid';
 import { clearDraft, isEdited, reducer, restoreDraft, saveDraft } from './state';
 
-const ROW = 'lg:grid lg:grid-cols-[680px_340px] lg:gap-x-[100px]';
+
 const MAX_LOG_LINES = 400;
 
 /** The server's current activity and its log, live over /api/events. Calls `onView` when the loaded spec changes. */
@@ -161,7 +162,7 @@ export function App() {
 
   if (!session || !view) {
     return (
-      <main className="mx-auto max-w-[680px] px-6 pt-24">
+      <main className="mx-auto max-w-[680px] px-4 pt-24 sm:px-6">
         <p className={`text-[15px] ${notice ? 'text-del' : 'text-muted'}`}>{notice ?? 'Connecting…'}</p>
       </main>
     );
@@ -199,7 +200,7 @@ export function App() {
           onSync={openSync}
         />
 
-        <main className="mx-auto max-w-[1120px] px-6 pt-14 pb-40 lg:px-0">
+        <main className={`${SHELL} pt-10 pb-40 split:pt-14`}>
           <div className={`${ROW} mb-12`}>
             <div aria-live="polite">
               {!connected && (
@@ -245,7 +246,7 @@ export function App() {
               {orphans.length > 0 && (
                 <section className={`${ROW} border-t border-rule pt-8`}>
                   <p className="text-[13px] text-muted">Comments not tied to a sentence</p>
-                  <aside className="mt-4 lg:mt-0">
+                  <aside className="mt-4 min-w-0 split:mt-0">
                     <Margin comments={orphans} onReply={onReply} onStatus={onStatus} />
                   </aside>
                 </section>

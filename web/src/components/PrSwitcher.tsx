@@ -103,7 +103,7 @@ export function PrSwitcher({ title, prNumber, open, onOpenChange, onPick, disabl
           role="menu"
           aria-label="Load a pull request"
           onKeyDown={onKey}
-          className="absolute top-[calc(100%+13px)] left-0 z-30 w-[min(520px,calc(100vw-48px))] border border-rule bg-paper py-1.5"
+          className="absolute top-[calc(100%+13px)] left-0 z-30 max-h-[calc(100dvh-72px)] w-[min(420px,calc(100vw-32px))] overflow-y-auto overscroll-contain border border-rule bg-paper py-1.5"
         >
           {!list && !error && <p className="px-4 py-2 text-[13px] text-muted">Loading pull requests…</p>}
           {error && <p className="px-4 py-2 text-[13px] text-del">{error}</p>}

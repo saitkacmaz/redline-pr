@@ -85,7 +85,7 @@ export function createApp(opts: AppOptions): Hono {
   app.post('/api/sync', async (c) => {
     const parsed = SyncRequestSchema.safeParse(await c.req.json<unknown>());
     if (!parsed.success) return c.json<ApiError>({ error: parsed.error.message }, 400);
-    return c.json<SyncResult>(await ws.sync(parsed.data.doc, parsed.data.mode));
+    return c.json<SyncResult>(await ws.sync(parsed.data.doc, parsed.data.mode, parsed.data.agent));
   });
 
   app.post('/api/replies', async (c) => {
