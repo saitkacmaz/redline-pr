@@ -4,27 +4,27 @@
 
 ## The one-minute read, written for people
 
-redline-pr turns a pull request's diff into a one-page, plain-English description of what the code does, with the PR's open review comments in the margin. Edit a sentence, and Claude Code or Codex changes the code to match.
+`redline-pr` turns a pull request's diff into a one-page, plain-English description of what the code does, with the PR's open review comments in the margin. Edit a sentence, and Claude Code or Codex changes the code to match.
 
 ### Why
 
-A coding agent writes an 800-line PR in minutes. Reviewing it means either reverse-engineering the diff and prompting a fix for every comment by hand, or letting the agent act on every comment at once with none of your judgment. redline-pr keeps the judgment with you and the typing with the agent.
+A coding agent writes an 800-line PR in minutes. Reviewing it means either reverse-engineering the diff and prompting a fix for every comment by hand, or letting the agent act on every comment at once with none of your judgment. `redline-pr` keeps the judgment with you and the typing with the agent.
 
 ### How you use it
 
 1. Run `redline` in your repo, on your branch. `redline claude` or `redline codex` picks the agent; `redline --demo` needs no repo.
-2. Read the spec. Each sentence is a checkable statement ("If the S3 read raises, the handler logs and still returns 200 OK"), linked to its lines; click to open the hunk inline.
-3. Answer the margin comments: rewrite a sentence to dictate a fix, reply to explain, or mark a comment **push back** so the agent leaves it alone.
-4. Press **Sync**. Only the sentences you changed go to the agent. Check the diff it made, then **Re-analyze diff** and repeat.
+2. Read the spec. Each sentence is a checkable statement (*"If the S3 read raises, the handler logs and still returns 200 OK"*), linked to its lines; click to open the hunk inline.
+3. Answer the margin comments: rewrite a sentence to dictate a fix, or reply in the margin to push back without touching the code.
+4. Press **Sync**. Only the sentences you changed go to the agent. Check the diff it made, then click **Re-analyze diff** and repeat.
 
 ### Before you adopt it
 
-- **No API keys.** It uses your logged-in `claude` or `codex` CLI and the Claude or ChatGPT plan you already have.
+- **No API keys.** Uses your logged-in `claude` or `codex` CLI and the Claude or ChatGPT plan you already have.
 - **Zero trace.** Caches live in `~/.cache/redline-pr/` (`%LOCALAPPDATA%` on Windows), never in your repo.
-- **Read-only until Sync.** Nothing in the repo changes, and nothing posts to GitHub, until you ask. redline never commits or pushes.
+- **Read-only until Sync.** Nothing in the repo changes, and nothing posts to GitHub, until you ask. `redline` never commits or pushes.
 - **Any Git repo.** PRs and review comments come through `gh` on GitHub; on GitLab, Bitbucket, or a repo with no remote, you review the local branch diff.
-- **Resolved and outdated threads are dropped** by GitHub's own flags, not a model.
-- **macOS, Linux and Windows,** and a layout that fits a split-screen window. Linux and Windows are covered by unit tests; day-to-day use so far is on macOS.
+- **No stale comments.** Resolved and outdated threads are filtered out deterministically using GitHub's own flags, not a model.
+- **Cross-platform.** Fits a split-screen window and runs on macOS, Linux, and Windows. Linux and Windows are covered by unit tests; day-to-day use so far is on macOS.
 
 </td></tr></table>
 
