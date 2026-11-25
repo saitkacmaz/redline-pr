@@ -15,7 +15,7 @@ A coding agent writes an 800-line PR in minutes. Reviewing it means either rever
 1. Run `redline` in your repo, on your branch. `redline claude` or `redline codex` picks the agent; `redline --demo` needs no repo.
 2. Read the spec. Each sentence is a checkable statement (*"If the S3 read raises, the handler logs and still returns 200 OK"*), linked to its lines; click to open the hunk inline.
 3. Answer the margin comments: rewrite a sentence to dictate a fix, or reply in the margin to push back without touching the code.
-4. Press **Sync**. Only the sentences you changed go to the agent. Check the diff it made, then click **Re-analyze diff** and repeat.
+4. Press **Sync**. Only the sentences you changed go to the agent. Check the diff it made, then click **Re-analyze diff** and repeat. The agent's session isn't lost: the page gives you the command to reopen it in your terminal (`claude --resume <id>` or `codex resume <id>`) to ask why it did something or keep going by hand.
 
 ### Before you adopt it
 
