@@ -65,6 +65,30 @@ test('--demo boots and guards the API with the page token', async () => {
   }
 });
 
+test('the favicons are served as images, not the page fallback', async () => {
+  const r = await boot(['--demo'], { cwd: tempDir('demo'), env: { XDG_CACHE_HOME: tempDir('cache') } });
+  try {
+    const html = await (await fetch(r.url)).text();
+    for (const [path, type] of [
+      ['/favicon.ico', 'image/x-icon'],
+      ['/favicon-16x16.png', 'image/png'],
+      ['/favicon-32x32.png', 'image/png'],
+      ['/apple-touch-icon.png', 'image/png'],
+      ['/icon-512.png', 'image/png'],
+    ] as const) {
+      if (path !== '/icon-512.png') assert.ok(html.includes(`href="${path}"`), `index.html links ${path}`);
+      const res = await fetch(`${r.url}${path}`);
+      assert.equal(res.status, 200, path);
+      assert.equal(res.headers.get('content-type'), type, path);
+      assert.equal(res.headers.get('cache-control'), 'no-cache', `${path} is not cached forever`);
+      assert.ok((await res.arrayBuffer()).byteLength > 0, path);
+    }
+    assert.equal((await fetch(`${r.url}/missing.png`)).status, 404, 'a missing file is a 404, not index.html');
+  } finally {
+    await r.stop();
+  }
+});
+
 test('live run: read-only until Sync, then only the code edit lands in the repo', async () => {
   const repo = makeRepo();
   const cache = tempDir('cache');

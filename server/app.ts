@@ -122,7 +122,8 @@ export function createApp(opts: AppOptions): Hono {
         const body = await readFile(path);
         return c.body(body, 200, {
           'content-type': MIME[extname(path)] ?? 'application/octet-stream',
-          'cache-control': 'public, max-age=31536000, immutable',
+          // Only Vite's hashed /assets/ files never change; icons keep their names across releases.
+          'cache-control': c.req.path.startsWith('/assets/') ? 'public, max-age=31536000, immutable' : 'no-cache',
         });
       } catch {
         return c.notFound();
