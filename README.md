@@ -1,5 +1,7 @@
 # redline-pr
 
+<table><tr><td>
+
 ## The one-minute read, written for people
 
 redline-pr turns a pull request's diff into a one-page, plain-English description of what the code does, with the PR's open review comments in the margin. Edit a sentence, and Claude Code or Codex changes the code to match.
@@ -24,7 +26,7 @@ A coding agent writes an 800-line PR in minutes. Reviewing it means either rever
 - **Resolved and outdated threads are dropped** by GitHub's own flags, not a model.
 - **macOS, Linux and Windows,** and a layout that fits a split-screen window. Linux and Windows are covered by unit tests; day-to-day use so far is on macOS.
 
----
+</td></tr></table>
 
 ## Reference
 
