@@ -1,7 +1,8 @@
 import { useLayoutEffect, useRef, useState } from 'react';
 import type { HiddenThread, MarginComment, ThreadReply } from '../../../shared/types';
 import { AutoTextarea } from './AutoTextarea';
-import { InlineCode } from './InlineCode';
+import { CommentText } from './CommentText';
+import { usePathName } from './PathName';
 
 interface Props {
   comments: MarginComment[];
@@ -21,7 +22,7 @@ function Reply({ reply, clamp, ref }: { reply: ThreadReply; clamp: boolean; ref?
     <div className="mt-2.5">
       <span className="text-[13px] font-semibold text-ink">@{reply.author}</span>
       <p ref={ref} className={`mt-0.5 ${BODY} ${clamp ? 'line-clamp-4' : ''}`}>
-        <InlineCode text={reply.body} />
+        <CommentText text={reply.body} />
       </p>
     </div>
   );
@@ -37,7 +38,8 @@ function Comment({ comment, linked, inline, onReply, onStatus }: { comment: Marg
   const body = useRef<HTMLParagraphElement>(null);
   const reply = useRef<HTMLParagraphElement>(null);
   const pushedBack = comment.status === 'pushed_back';
-  const where = comment.file ? `${comment.file.split('/').pop() ?? comment.file}${comment.line ? `:${comment.line}` : ''}` : null;
+  const pathName = usePathName();
+  const where = comment.file ? `${pathName(comment.file)}${comment.line ? `:${comment.line}` : ''}` : null;
   const replies = comment.replies ?? [];
   const latest = replies.at(-1);
 
@@ -59,7 +61,11 @@ function Comment({ comment, linked, inline, onReply, onStatus }: { comment: Marg
     >
       <div className="flex min-w-0 flex-wrap items-baseline gap-x-2 text-[13.5px]">
         <span className="font-semibold text-ink">@{comment.author}</span>
-        {where && <span className="min-w-0 font-mono text-[11.5px] text-muted [overflow-wrap:anywhere]">{where}</span>}
+        {where && (
+          <span title={comment.file} className="min-w-0 font-mono text-[11.5px] text-muted [overflow-wrap:anywhere]">
+            {where}
+          </span>
+        )}
         {comment.replied && (
           <span className="text-[12px] text-muted" title="You replied last; waiting on the reviewer.">
             replied
@@ -67,7 +73,7 @@ function Comment({ comment, linked, inline, onReply, onStatus }: { comment: Marg
         )}
       </div>
       <p ref={body} className={`mt-0.5 ${BODY} ${open ? '' : 'line-clamp-5'}`}>
-        <InlineCode text={comment.body} />
+        <CommentText text={comment.body} />
       </p>
       {open ? replies.map((r, i) => <Reply key={i} reply={r} clamp={false} />) : latest && <Reply ref={reply} reply={latest} clamp />}
       {open && (comment.omittedReplies ?? 0) > 0 && (
@@ -121,6 +127,7 @@ export function Margin({ comments, linked = false, inline = false, onReply, onSt
 /** Resolved and outdated threads: one muted line, expandable only if you want to look. */
 export function HiddenThreads({ threads }: { threads: HiddenThread[] }) {
   const [open, setOpen] = useState(false);
+  const pathName = usePathName();
   if (threads.length === 0) return null;
   return (
     <div className="pl-4">
@@ -132,12 +139,18 @@ export function HiddenThreads({ threads }: { threads: HiddenThread[] }) {
           {threads.map((t) => (
             <li key={t.id} className="-ml-4 border-l border-rule pl-4 text-[13.5px] leading-[1.55] text-muted">
               <span className="font-semibold">@{t.author}</span>
-              {t.file && <span className="ml-2 font-mono text-[11.5px]">{t.file.split('/').pop()}</span>}
+              {t.file && (
+                <span title={t.file} className="ml-2 font-mono text-[11.5px] [overflow-wrap:anywhere]">
+                  {pathName(t.file)}
+                </span>
+              )}
               <span className="ml-2 text-[12px]">
                 {t.reason}
                 {t.replyCount > 0 ? ` · ${plural(t.replyCount, 'reply', 'replies')}` : ''}
               </span>
-              <p className="mt-0.5 line-clamp-3 whitespace-pre-line [overflow-wrap:anywhere]">{t.body}</p>
+              <p className="mt-0.5 line-clamp-3 whitespace-pre-line [overflow-wrap:anywhere]">
+                <CommentText text={t.body} />
+              </p>
             </li>
           ))}
         </ul>

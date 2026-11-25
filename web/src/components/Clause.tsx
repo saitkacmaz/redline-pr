@@ -1,8 +1,10 @@
 import { useLayoutEffect, useRef, useState, type KeyboardEvent, type MouseEvent } from 'react';
 import type { CodeAnchor, SpecClause } from '../../../shared/types';
+import { lineRange } from '../paths';
 import { isEdited } from '../state';
 import { HunkPeek } from './HunkPeek';
 import { InlineCode } from './InlineCode';
+import { usePathName } from './PathName';
 
 interface Props {
   clause: SpecClause;
@@ -11,11 +13,6 @@ interface Props {
   onEdit: (text: string) => void;
   onReset: () => void;
 }
-
-const anchorLabel = (a: CodeAnchor): string => {
-  const name = a.file.split('/').pop() ?? a.file;
-  return a.startLine === a.endLine ? `${name}:${a.startLine}` : `${name}:${a.startLine}-${a.endLine}`;
-};
 
 const anchorKey = (a: CodeAnchor): string => `${a.file}:${a.startLine}-${a.endLine}`;
 
@@ -42,6 +39,7 @@ function placeCaret(el: HTMLElement, point: { x: number; y: number } | null): vo
 }
 
 export function Clause({ clause, linked = false, onEdit, onReset }: Props) {
+  const pathName = usePathName();
   const [editing, setEditing] = useState(false);
   const [open, setOpen] = useState<string | null>(null);
   const editable = useRef<HTMLSpanElement>(null);
@@ -141,7 +139,7 @@ export function Clause({ clause, linked = false, onEdit, onReset }: Props) {
                 active ? 'text-ink underline' : 'text-muted'
               }`}
             >
-              {anchorLabel(a)}
+              {lineRange(pathName(a.file), a.startLine, a.endLine)}
             </button>
           );
         })}

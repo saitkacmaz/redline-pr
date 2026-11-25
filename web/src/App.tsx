@@ -2,11 +2,13 @@ import { useCallback, useEffect, useLayoutEffect, useReducer, useRef, useState }
 import type { Activity, LoadTarget, MarginComment, PostedReply, SessionInfo, SpecView, SyncResult } from '../../shared/types';
 import { api, subscribe } from './api';
 import { HiddenThreads, Margin } from './components/Margin';
+import { PathName } from './components/PathName';
 import { SpecBody } from './components/SpecBody';
 import { LogPeek, StatusLine } from './components/StatusLine';
 import { SyncView } from './components/SyncView';
 import { TopBar } from './components/TopBar';
 import { COLUMNS as ROW, SHELL } from './grid';
+import { docPaths, shortPaths } from './paths';
 import { clearDraft, isEdited, reducer, restoreDraft, saveDraft } from './state';
 
 
@@ -178,9 +180,10 @@ export function App() {
   const mode = session.demo ? 'demo' : session.dryRun ? 'dry run' : null;
   // #sync shows the Sync view only once there's a spec to sync; otherwise the spec view explains why not.
   const onSync = route === 'sync' && doc !== null && ready !== null;
+  const pathName = shortPaths(doc ? docPaths(doc) : []);
 
   return (
-    <>
+    <PathName.Provider value={pathName}>
       {/* The spec stays mounted while Sync is open, so open code peeks and expanded threads survive Back. */}
       <div hidden={onSync}>
         <TopBar
@@ -280,6 +283,6 @@ export function App() {
           onBack={backToSpec}
         />
       )}
-    </>
+    </PathName.Provider>
   );
 }

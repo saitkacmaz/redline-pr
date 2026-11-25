@@ -1,10 +1,12 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { AGENT_LABEL, AGENT_NAMES, AGENT_SHORT, type Activity, type AgentName, type PostedReply, type SessionInfo, type SpecDocument, type SyncMode, type SyncPlan, type SyncResult } from '../../../shared/types';
 import { api } from '../api';
+import { lineRange } from '../paths';
 import { AutoTextarea } from './AutoTextarea';
 import { Hairline } from './Hairline';
 import { DiffLines } from './HunkPeek';
 import { Redline } from './Redline';
+import { usePathName } from './PathName';
 import { LogPeek, StatusLine } from './StatusLine';
 
 interface Props {
@@ -30,8 +32,6 @@ function Label({ children }: { children: ReactNode }) {
   return <h2 className="mb-4 text-[11.5px] font-medium uppercase tracking-[0.08em] text-muted">{children}</h2>;
 }
 
-const anchorText = (a: { file: string; startLine: number; endLine: number }): string =>
-  `${a.file}:${a.startLine}${a.endLine !== a.startLine ? `-${a.endLine}` : ''}`;
 
 /** The run's agent session, one paste away from continuing it by hand. */
 function ResumeLine({ agent, command }: { agent: AgentName; command: string }) {
@@ -82,6 +82,7 @@ const SECONDARY =
  */
 export function SyncView(props: Props) {
   const { doc, session, canPostReplies, runBlocked, result, onResult, activity, log, posted, onPosted, onReply, onReanalyze, onBack } = props;
+  const pathName = usePathName();
   const [plan, setPlan] = useState<SyncPlan | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<SyncMode | 'post' | null>(null);
@@ -236,7 +237,13 @@ export function SyncView(props: Props) {
                     <div key={e.clauseId}>
                       <div className="mb-1 text-[12px] text-muted">{e.sectionTitle}</div>
                       <Redline before={e.before} after={e.after} />
-                      <div className="mt-1.5 font-mono text-[12px] text-muted [overflow-wrap:anywhere]">{e.anchors.map(anchorText).join('  ')}</div>
+                      <div className="mt-1.5 flex flex-wrap gap-x-4 font-mono text-[12px] text-muted [overflow-wrap:anywhere]">
+                        {e.anchors.map((a, i) => (
+                          <span key={i} title={`${a.file} lines ${a.startLine}–${a.endLine}`} className="min-w-0">
+                            {lineRange(pathName(a.file), a.startLine, a.endLine)}
+                          </span>
+                        ))}
+                      </div>
                     </div>
                   ))}
                 </div>
