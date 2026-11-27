@@ -1,4 +1,5 @@
 import type { CodeAnchor } from '../../../shared/types';
+import { PathLabel } from './PathLabel';
 
 interface Line {
   kind: 'add' | 'del' | 'ctx' | 'header';
@@ -66,7 +67,7 @@ export function HunkPeek({ anchor }: { anchor: CodeAnchor }) {
   return (
     <div className="mt-3 mb-1 border-l border-ink/80 pl-4">
       <div className="mb-1.5 font-mono text-[11.5px] text-muted">
-        {anchor.file} <span>L{anchor.startLine}–{anchor.endLine}</span>
+        <PathLabel path={anchor.file} startLine={anchor.startLine} endLine={anchor.endLine} />
       </div>
       {anchor.hunk.trim() === '' ? (
         <div className="font-mono text-[12.5px] text-muted">No diff lines for this range.</div>

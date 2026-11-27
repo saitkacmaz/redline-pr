@@ -1,10 +1,9 @@
 import { useLayoutEffect, useRef, useState, type KeyboardEvent, type MouseEvent } from 'react';
 import type { CodeAnchor, SpecClause } from '../../../shared/types';
-import { lineRange } from '../paths';
 import { isEdited } from '../state';
 import { HunkPeek } from './HunkPeek';
 import { InlineCode } from './InlineCode';
-import { usePathName } from './PathName';
+import { PathLabel } from './PathLabel';
 
 interface Props {
   clause: SpecClause;
@@ -39,7 +38,6 @@ function placeCaret(el: HTMLElement, point: { x: number; y: number } | null): vo
 }
 
 export function Clause({ clause, linked = false, onEdit, onReset }: Props) {
-  const pathName = usePathName();
   const [editing, setEditing] = useState(false);
   const [open, setOpen] = useState<string | null>(null);
   const editable = useRef<HTMLSpanElement>(null);
@@ -132,14 +130,14 @@ export function Clause({ clause, linked = false, onEdit, onReset }: Props) {
             <button
               key={key}
               type="button"
-              title={`${a.file} lines ${a.startLine}–${a.endLine}`}
+              data-file={a.file}
               aria-expanded={active}
               onClick={() => setOpen(active ? null : key)}
-              className={`mr-2 cursor-pointer whitespace-nowrap font-mono text-[12px] underline-offset-[3px] hover:underline ${
+              className={`mr-2 cursor-pointer text-left font-mono text-[12px] underline-offset-[3px] hover:underline ${
                 active ? 'text-ink underline' : 'text-muted'
               }`}
             >
-              {lineRange(pathName(a.file), a.startLine, a.endLine)}
+              <PathLabel path={a.file} startLine={a.startLine} endLine={a.endLine} />
             </button>
           );
         })}

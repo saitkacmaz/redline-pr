@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { hunkFor, numberedDiff, parseUnifiedDiff } from '../server/diff.js';
+import { fileStats, hunkFor, numberedDiff, parseUnifiedDiff } from '../server/diff.js';
 import { DEMO_DIFF } from '../server/demo.js';
 
 const SMALL = `diff --git a/src/a.js b/src/a.js
@@ -44,6 +44,15 @@ test('parses the demo diff into its three files', () => {
     files.map((f) => f.path).sort(),
     ['migrations/0042_ingest_jobs.sql', 'services/ingest/handler.py', 'services/ingest/jobs.py'],
   );
+});
+
+test('fileStats counts added and removed lines per file, like git diff --stat', () => {
+  assert.deepEqual(fileStats(parseUnifiedDiff(SMALL)), [
+    { path: 'src/a.js', additions: 5, deletions: 1 },
+    { path: 'old.txt', additions: 0, deletions: 2 },
+  ]);
+  const tricky = 'diff --git a/x.md b/x.md\n--- a/x.md\n+++ b/x.md\n@@ -1,2 +1,2 @@\n---- old rule\n++++ new rule\n same\n\\ No newline at end of file\n';
+  assert.deepEqual(fileStats(parseUnifiedDiff(tricky)), [{ path: 'x.md', additions: 1, deletions: 1 }], 'content that looks like a header still counts once');
 });
 
 test('numberedDiff numbers new-side lines and leaves removals unnumbered', () => {

@@ -1,6 +1,7 @@
 import type { Ref } from 'react';
-import type { Activity, LoadTarget } from '../../../shared/types';
+import type { Activity, ChangedFile, LoadTarget } from '../../../shared/types';
 import { SHELL } from '../grid';
+import { FilesMenu } from './FilesMenu';
 import { Hairline } from './Hairline';
 import { PrSwitcher } from './PrSwitcher';
 
@@ -11,6 +12,10 @@ interface Props {
   mode: string | null;
   /** Edit and comment counts, once a spec is loaded. */
   counts: { edits: number; comments: number } | null;
+  /** The diff's files, and which of them a sentence points at. */
+  files: ChangedFile[];
+  anchored: Set<string>;
+  onJump: (path: string) => void;
   /** Something is running; reloading and syncing wait for it. */
   busy: boolean;
   canSync: boolean;
@@ -30,7 +35,7 @@ export function TopBar(props: Props) {
   return (
     <header className="sticky top-0 z-20 border-b border-rule bg-paper">
       {/* The title gives way first (it truncates); below 640px the branch and counts go before it does. */}
-      <div className={`${SHELL} flex min-h-12 items-center gap-3 sm:gap-4`}>
+      <div className={`${SHELL} relative flex min-h-12 items-center gap-3 sm:gap-4`}>
         <PrSwitcher
           title={props.title}
           prNumber={props.prNumber}
@@ -46,6 +51,7 @@ export function TopBar(props: Props) {
           </span>
         )}
         <span className="ml-auto flex shrink-0 items-center gap-4 text-[13px] text-muted tabular-nums">
+          <FilesMenu files={props.files} anchored={props.anchored} onJump={props.onJump} />
           <button
             type="button"
             onClick={props.onRefresh}

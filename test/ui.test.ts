@@ -269,6 +269,77 @@ describe('editing in the browser (demo)', { skip: chromePath ? false : 'no Chrom
     assert.equal(await page.eval<boolean>(`document.activeElement === ${trigger}`), true);
   });
 
+  test('anchors show the directory in faint ink and the file and lines in anchor ink, the same in the hunk peek', async () => {
+    await fresh();
+    const anchor = `document.querySelector('[data-clause] button[data-file]')`;
+    const parts = await page.eval<{ dir: string; dirColor: string; name: string; file: string }>(
+      `(() => { const b = ${anchor}; const [dir, name] = b.children; return { dir: dir.textContent, dirColor: getComputedStyle(dir).color, name: name.textContent, file: b.dataset.file }; })()`,
+    );
+    assert.equal(parts.file, 'services/ingest/handler.py');
+    assert.equal(parts.dir, 'services/ingest/');
+    assert.equal(parts.dirColor, 'rgb(163, 163, 158)', 'the faint token');
+    assert.match(parts.name, /^handler\.py:\d+(–\d+)?$/);
+    await page.clickEl(anchor);
+    const peek = `[...document.querySelectorAll('[data-clause] div')].find((d) => d.className.includes('border-ink/80'))`;
+    await page.waitFor(peek);
+    assert.equal(await page.eval<string>(`${peek}.firstElementChild.textContent`), parts.dir + parts.name);
+  });
+
+  test('N files opens an indented list by directory; a file jumps to its first sentence; Esc and outside clicks close it', async () => {
+    await fresh();
+    const trigger = `[...document.querySelectorAll('header button')].find((b) => / files?$/.test(b.textContent))`;
+    const menu = `document.querySelector('[role=menu][aria-label="Changed files"]')`;
+    assert.equal(await page.eval<string>(`${trigger}.textContent`), '3 files');
+
+    await page.clickEl(trigger);
+    await page.waitFor(menu);
+    const rows = await page.eval<{ text: string; pad: string }[]>(`[...${menu}.children].map((r) => ({ text: r.innerText.replace(/\\s+/g, ' ').trim(), pad: r.style.paddingLeft }))`);
+    assert.deepEqual(rows.map((r) => r.text.replace(/ [+-]\d+.*$/, '')), ['migrations/', '0042_ingest_jobs.sql', 'services/ingest/', 'handler.py', 'jobs.py']);
+    assert.deepEqual(rows.map((r) => r.pad), ['16px', '32px', '16px', '32px', '32px'], 'pure indentation');
+    assert.ok(rows.every((r) => !/[├└│]/.test(r.text)), 'no tree connectors');
+    assert.match(rows[3]?.text ?? '', /^handler\.py \+\d+$/, 'line counts; a new file has no deletions to show');
+
+    await page.key('Escape');
+    await page.waitFor(`!${menu}`);
+    assert.equal(await page.eval<boolean>(`document.activeElement === ${trigger}`), true, 'Escape returns focus');
+
+    await page.clickEl(trigger);
+    await page.waitFor(menu);
+    await page.click(5, 400);
+    await page.waitFor(`!${menu}`);
+
+    await page.eval('window.scrollTo(0, 0)');
+    await page.clickEl(trigger);
+    await page.waitFor(menu);
+    await page.clickEl(`[...${menu}.querySelectorAll('[role=menuitem]')].find((b) => b.textContent.startsWith('jobs.py'))`);
+    await page.waitFor(`!${menu} && document.activeElement?.dataset.file === 'services/ingest/jobs.py'`);
+    await page.waitFor(`(() => { const r = document.activeElement.getBoundingClientRect(); return r.top > 48 && r.bottom < innerHeight; })()`);
+  });
+
+  test('the Files list fits wide, split-screen, narrow and phone windows, never scrolling the page sideways', async () => {
+    await fresh();
+    const trigger = `[...document.querySelectorAll('header button')].find((b) => / files?$/.test(b.textContent))`;
+    const menu = `document.querySelector('[role=menu][aria-label="Changed files"]')`;
+    try {
+      for (const width of [1440, 960, 600, 360]) {
+        await page.send('Emulation.setDeviceMetricsOverride', { width, height: 700, deviceScaleFactor: 1, mobile: false });
+        await page.eval('window.scrollTo(0, 0)');
+        await page.clickEl(trigger);
+        await page.waitFor(menu);
+        const m = await page.eval<{ left: number; right: number; width: number; overflow: number }>(
+          `(() => { const b = ${menu}.getBoundingClientRect(); return { left: b.left, right: b.right, width: b.width, overflow: document.documentElement.scrollWidth - innerWidth }; })()`,
+        );
+        assert.ok(m.left >= 0 && m.right <= width, `${width}px: menu at ${m.left}–${m.right}`);
+        assert.equal(m.width, Math.min(380, width - 32), `${width}px: min(380px, 100vw - 32px)`);
+        assert.equal(m.overflow, 0, `${width}px: no sideways scroll`);
+        await page.key('Escape');
+        await page.waitFor(`!${menu}`);
+      }
+    } finally {
+      await page.send('Emulation.clearDeviceMetricsOverride', {});
+    }
+  });
+
   test('Refresh reloads in place and keeps unsaved redlines', async () => {
     await fresh();
     await page.clickEl(sentence('always returns HTTP 200'));
@@ -345,7 +416,7 @@ describe('editing in the browser (demo)', { skip: chromePath ? false : 'no Chrom
     await page.clickEl(link);
     await page.waitFor(`document.body.innerText.includes('Typo in the log message')`);
     assert.match(await page.eval<string>('document.body.innerText'), /resolved · 1 reply/);
-    assert.match(await page.eval<string>(`[...document.querySelectorAll('aside[data-for]')].map((n) => n.innerText).join('\\n')`), /@maya-chen\s+handler\.py:52\s+replied/);
+    assert.match(await page.eval<string>(`[...document.querySelectorAll('aside[data-for]')].map((n) => n.innerText).join('\\n')`), /@maya-chen\s+services\/ingest\/handler\.py:52\s+replied/);
   });
 
   test('a server that has stopped is named as such, not "Failed to fetch"', async () => {

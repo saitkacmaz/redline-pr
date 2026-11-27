@@ -2,13 +2,11 @@ import { useCallback, useEffect, useLayoutEffect, useReducer, useRef, useState }
 import type { Activity, LoadTarget, MarginComment, PostedReply, SessionInfo, SpecView, SyncResult } from '../../shared/types';
 import { api, subscribe } from './api';
 import { HiddenThreads, Margin } from './components/Margin';
-import { PathName } from './components/PathName';
 import { SpecBody } from './components/SpecBody';
 import { LogPeek, StatusLine } from './components/StatusLine';
 import { SyncView } from './components/SyncView';
 import { TopBar } from './components/TopBar';
 import { COLUMNS as ROW, SHELL } from './grid';
-import { docPaths, shortPaths } from './paths';
 import { clearDraft, isEdited, reducer, restoreDraft, saveDraft } from './state';
 
 
@@ -180,10 +178,26 @@ export function App() {
   const mode = session.demo ? 'demo' : session.dryRun ? 'dry run' : null;
   // #sync shows the Sync view only once there's a spec to sync; otherwise the spec view explains why not.
   const onSync = route === 'sync' && doc !== null && ready !== null;
-  const pathName = shortPaths(doc ? docPaths(doc) : []);
+  const anchored = new Set(clauses.flatMap((c) => c.anchors.map((a) => a.file)));
+
+  /** From the Files list: bring the first sentence about `path` into view and mark it briefly. */
+  const jumpToFile = (path: string): void => {
+    const clause = clauses.find((c) => c.anchors.some((a) => a.file === path));
+    const el = clause && document.querySelector<HTMLElement>(`[data-clause="${CSS.escape(clause.id)}"]`);
+    if (!el) return;
+    const still = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    el.scrollIntoView({ block: 'center', behavior: still ? 'auto' : 'smooth' });
+    el.querySelector<HTMLElement>(`[data-file="${CSS.escape(path)}"]`)?.focus({ preventScroll: true });
+    (el.querySelector('p') ?? el).animate([{ backgroundColor: 'rgb(20 20 19 / 0.06)' }, { backgroundColor: 'rgb(20 20 19 / 0)' }], {
+      duration: still ? 900 : 1800,
+      delay: still ? 0 : 300,
+      easing: 'ease-out',
+      fill: 'backwards',
+    });
+  };
 
   return (
-    <PathName.Provider value={pathName}>
+    <>
       {/* The spec stays mounted while Sync is open, so open code peeks and expanded threads survive Back. */}
       <div hidden={onSync}>
         <TopBar
@@ -193,6 +207,9 @@ export function App() {
           branch={doc?.branch ?? session.branch}
           mode={mode}
           counts={doc ? { edits: clauses.filter(isEdited).length, comments: doc.comments.length } : null}
+          files={ready?.files ?? []}
+          anchored={anchored}
+          onJump={jumpToFile}
           busy={busy}
           canSync={ready !== null && doc !== null && !loading}
           activity={activity}
@@ -283,6 +300,6 @@ export function App() {
           onBack={backToSpec}
         />
       )}
-    </PathName.Provider>
+    </>
   );
 }

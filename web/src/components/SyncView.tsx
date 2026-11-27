@@ -1,12 +1,11 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { AGENT_LABEL, AGENT_NAMES, AGENT_SHORT, type Activity, type AgentName, type PostedReply, type SessionInfo, type SpecDocument, type SyncMode, type SyncPlan, type SyncResult } from '../../../shared/types';
 import { api } from '../api';
-import { lineRange } from '../paths';
 import { AutoTextarea } from './AutoTextarea';
 import { Hairline } from './Hairline';
 import { DiffLines } from './HunkPeek';
 import { Redline } from './Redline';
-import { usePathName } from './PathName';
+import { PathLabel } from './PathLabel';
 import { LogPeek, StatusLine } from './StatusLine';
 
 interface Props {
@@ -82,7 +81,6 @@ const SECONDARY =
  */
 export function SyncView(props: Props) {
   const { doc, session, canPostReplies, runBlocked, result, onResult, activity, log, posted, onPosted, onReply, onReanalyze, onBack } = props;
-  const pathName = usePathName();
   const [plan, setPlan] = useState<SyncPlan | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<SyncMode | 'post' | null>(null);
@@ -237,10 +235,10 @@ export function SyncView(props: Props) {
                     <div key={e.clauseId}>
                       <div className="mb-1 text-[12px] text-muted">{e.sectionTitle}</div>
                       <Redline before={e.before} after={e.after} />
-                      <div className="mt-1.5 flex flex-wrap gap-x-4 font-mono text-[12px] text-muted [overflow-wrap:anywhere]">
+                      <div className="mt-1.5 flex flex-wrap gap-x-4 font-mono text-[12px] text-muted">
                         {e.anchors.map((a, i) => (
-                          <span key={i} title={`${a.file} lines ${a.startLine}–${a.endLine}`} className="min-w-0">
-                            {lineRange(pathName(a.file), a.startLine, a.endLine)}
+                          <span key={i} className="min-w-0">
+                            <PathLabel path={a.file} startLine={a.startLine} endLine={a.endLine} />
                           </span>
                         ))}
                       </div>

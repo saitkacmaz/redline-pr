@@ -2,7 +2,7 @@ import { useLayoutEffect, useRef, useState } from 'react';
 import type { HiddenThread, MarginComment, ThreadReply } from '../../../shared/types';
 import { AutoTextarea } from './AutoTextarea';
 import { CommentText } from './CommentText';
-import { usePathName } from './PathName';
+import { PathLabel } from './PathLabel';
 
 interface Props {
   comments: MarginComment[];
@@ -38,8 +38,6 @@ function Comment({ comment, linked, inline, onReply, onStatus }: { comment: Marg
   const body = useRef<HTMLParagraphElement>(null);
   const reply = useRef<HTMLParagraphElement>(null);
   const pushedBack = comment.status === 'pushed_back';
-  const pathName = usePathName();
-  const where = comment.file ? `${pathName(comment.file)}${comment.line ? `:${comment.line}` : ''}` : null;
   const replies = comment.replies ?? [];
   const latest = replies.at(-1);
 
@@ -61,9 +59,9 @@ function Comment({ comment, linked, inline, onReply, onStatus }: { comment: Marg
     >
       <div className="flex min-w-0 flex-wrap items-baseline gap-x-2 text-[13.5px]">
         <span className="font-semibold text-ink">@{comment.author}</span>
-        {where && (
-          <span title={comment.file} className="min-w-0 font-mono text-[11.5px] text-muted [overflow-wrap:anywhere]">
-            {where}
+        {comment.file && (
+          <span className="min-w-0 font-mono text-[11.5px] text-muted">
+            <PathLabel path={comment.file} startLine={comment.line} />
           </span>
         )}
         {comment.replied && (
@@ -127,7 +125,6 @@ export function Margin({ comments, linked = false, inline = false, onReply, onSt
 /** Resolved and outdated threads: one muted line, expandable only if you want to look. */
 export function HiddenThreads({ threads }: { threads: HiddenThread[] }) {
   const [open, setOpen] = useState(false);
-  const pathName = usePathName();
   if (threads.length === 0) return null;
   return (
     <div className="pl-4">
@@ -140,8 +137,8 @@ export function HiddenThreads({ threads }: { threads: HiddenThread[] }) {
             <li key={t.id} className="-ml-4 border-l border-rule pl-4 text-[13.5px] leading-[1.55] text-muted">
               <span className="font-semibold">@{t.author}</span>
               {t.file && (
-                <span title={t.file} className="ml-2 font-mono text-[11.5px] [overflow-wrap:anywhere]">
-                  {pathName(t.file)}
+                <span className="ml-2 font-mono text-[11.5px]">
+                  <PathLabel path={t.file} />
                 </span>
               )}
               <span className="ml-2 text-[12px]">

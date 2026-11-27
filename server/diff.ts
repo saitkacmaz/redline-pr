@@ -1,3 +1,5 @@
+import type { ChangedFile } from '../shared/types.js';
+
 export interface ParsedHunk {
   file: string;
   /** First and last line numbers on the new side of the file. */
@@ -15,6 +17,21 @@ export interface ParsedFile {
   hunks: ParsedHunk[];
   /** Changes with no line hunks, e.g. "binary", "renamed from x", "mode 100644 → 100755". */
   notes: string[];
+}
+
+/** Added and removed lines per file, as `git diff --stat` counts them. */
+export function fileStats(files: ParsedFile[]): ChangedFile[] {
+  return files.map((f) => {
+    let additions = 0;
+    let deletions = 0;
+    for (const h of f.hunks) {
+      for (const line of h.raw.split('\n')) {
+        if (line.startsWith('+')) additions++;
+        else if (line.startsWith('-')) deletions++;
+      }
+    }
+    return { path: f.path, additions, deletions };
+  });
 }
 
 const HUNK_HEADER = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/;

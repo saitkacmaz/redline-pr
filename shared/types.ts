@@ -99,12 +99,21 @@ export interface SessionInfo {
   providers: ProviderStatuses;
 }
 
+/** A file in the reviewed diff, with its line counts. */
+export interface ChangedFile {
+  path: string;
+  additions: number;
+  deletions: number;
+}
+
 /** What the server has loaded right now. */
 export type SpecView =
   | { status: 'loading'; label: string }
   | {
       status: 'ready';
       doc: SpecDocument;
+      /** Every reviewed file in the diff, for the Files list. */
+      files: ChangedFile[];
       canPostReplies: boolean;
       /** Why Run with Claude Code is unavailable for this spec, if it is. */
       runBlocked?: string;

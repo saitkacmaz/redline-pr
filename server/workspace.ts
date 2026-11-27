@@ -8,14 +8,15 @@ import type {
   PrListResponse,
   SessionInfo,
   SpecDocument,
+  ChangedFile,
   SpecView,
   SyncMode,
   SyncPlan,
   SyncResult,
 } from '../shared/types.js';
 import type { ActivityBus, Tracker } from './activity.js';
-import { demoDocument } from './demo.js';
-import { parseUnifiedDiff } from './diff.js';
+import { demoDocument, demoFiles } from './demo.js';
+import { fileStats, parseUnifiedDiff } from './diff.js';
 import { currentBranch, diffAgainst, hasCommit, headCommit, isAncestor, isExcludedPath, NoBaseBranchError, resolveBaseRef } from './git.js';
 import {
   fetchComments,
@@ -59,6 +60,7 @@ interface Empty {
 
 interface Loaded {
   doc: SpecDocument;
+  files: ChangedFile[];
   pr: PullRequest | null;
   /** The diff is the working tree's own, so Claude Code can apply edits here. */
   checkedOut: boolean;
@@ -158,6 +160,7 @@ export class Workspace {
       this.view = {
         status: 'ready',
         doc: loaded.doc,
+        files: loaded.files,
         canPostReplies: loaded.pr !== null && loaded.hasGh && !this.opts.demo && !this.opts.dryRun,
         ...(loaded.checkedOut
           ? {}
@@ -180,7 +183,7 @@ export class Workspace {
 
   private demo(): Loaded {
     this.branch = 'feat/s3-ingest-pipeline';
-    return { doc: demoDocument(), pr: null, checkedOut: true, hasGh: false };
+    return { doc: demoDocument(), files: demoFiles(), pr: null, checkedOut: true, hasGh: false };
   }
 
   /** The PR's head is this branch's own work, not some other branch (or one already merged into the base). */
@@ -284,7 +287,7 @@ export class Workspace {
         signal,
       },
     );
-    return { doc: hiddenThreads.length > 0 ? { ...doc, hiddenThreads } : doc, pr, checkedOut, hasGh };
+    return { doc: hiddenThreads.length > 0 ? { ...doc, hiddenThreads } : doc, files: fileStats(files), pr, checkedOut, hasGh };
   }
 
   async pullRequests(): Promise<PrListResponse> {

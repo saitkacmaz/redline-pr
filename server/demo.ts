@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto';
-import type { HiddenThread, MarginComment, SpecDocument } from '../shared/types.js';
-import { hunkFor, parseUnifiedDiff } from './diff.js';
+import type { ChangedFile, HiddenThread, MarginComment, SpecDocument } from '../shared/types.js';
+import { fileStats, hunkFor, parseUnifiedDiff } from './diff.js';
 
 /**
  * A pre-baked PR so the full UI and Sync flow work without a repo, `gh`, or
@@ -331,6 +331,10 @@ const HIDDEN: HiddenThread[] = [
     replyCount: 0,
   },
 ];
+
+export function demoFiles(): ChangedFile[] {
+  return fileStats(parseUnifiedDiff(DEMO_DIFF));
+}
 
 export function demoDocument(): SpecDocument {
   const files = parseUnifiedDiff(DEMO_DIFF);
