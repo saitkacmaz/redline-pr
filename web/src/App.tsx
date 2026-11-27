@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useReducer, useRef, useState } from 'react';
+import { flushSync } from 'react-dom';
 import type { Activity, LoadTarget, MarginComment, PostedReply, SessionInfo, SpecView, SyncResult } from '../../shared/types';
 import { api, subscribe } from './api';
 import { HiddenThreads, Margin } from './components/Margin';
@@ -7,6 +8,7 @@ import { LogPeek, StatusLine } from './components/StatusLine';
 import { SyncView } from './components/SyncView';
 import { TopBar } from './components/TopBar';
 import { COLUMNS as ROW, SHELL } from './grid';
+import { foldedFor, sectionOf, toggleFolded, type Folded } from './sections';
 import { clearDraft, isEdited, reducer, restoreDraft, saveDraft } from './state';
 
 
@@ -91,6 +93,7 @@ export function App() {
   const [switcher, setSwitcher] = useState(false);
   const [result, setResult] = useState<SyncResult | null>(null);
   const [posted, setPosted] = useState<Record<string, PostedReply>>({});
+  const [foldState, setFoldState] = useState<Folded>({ docId: null, ids: new Set() });
   const syncButton = useRef<HTMLButtonElement>(null);
   const docId = useRef<string | null>(null);
   const seq = useRef(0);
@@ -179,10 +182,17 @@ export function App() {
   // #sync shows the Sync view only once there's a spec to sync; otherwise the spec view explains why not.
   const onSync = route === 'sync' && doc !== null && ready !== null;
   const anchored = new Set(clauses.flatMap((c) => c.anchors.map((a) => a.file)));
+  const folded = foldedFor(foldState, doc?.id);
+  const toggleSection = (sectionId: string, fold?: boolean): void => {
+    if (doc) setFoldState((f) => toggleFolded(f, doc.id, sectionId, fold));
+  };
 
   /** From the Files list: bring the first sentence about `path` into view and mark it briefly. */
   const jumpToFile = (path: string): void => {
     const clause = clauses.find((c) => c.anchors.some((a) => a.file === path));
+    const section = clause && doc && sectionOf(doc.sections, clause.id);
+    // Open its section first, synchronously, so there is a sentence to scroll to.
+    if (section && folded.has(section.id)) flushSync(() => toggleSection(section.id, false));
     const el = clause && document.querySelector<HTMLElement>(`[data-clause="${CSS.escape(clause.id)}"]`);
     if (!el) return;
     const still = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -261,7 +271,7 @@ export function App() {
           {doc && (
             // While a new spec loads, the old one stays visible for reference but can't be edited.
             <div inert={loading} className={`transition-opacity duration-300 ${loading ? 'opacity-40' : ''}`}>
-              <SpecBody doc={doc} dispatch={dispatch} onReply={onReply} onStatus={onStatus} />
+              <SpecBody doc={doc} dispatch={dispatch} onReply={onReply} onStatus={onStatus} folded={folded} onToggle={toggleSection} />
 
               {orphans.length > 0 && (
                 <section className={`${ROW} border-t border-rule pt-8`}>

@@ -340,6 +340,88 @@ describe('editing in the browser (demo)', { skip: chromePath ? false : 'no Chrom
     }
   });
 
+  const heading = (title: string): string => `[...document.querySelectorAll('main section h2 button')].find((b) => b.textContent.includes(${JSON.stringify(title)}))`;
+
+  test('folding a section hides its sentences and notes, re-aligns the rest, and keeps its edit and reply in Sync', async () => {
+    await fresh();
+    await page.send('Emulation.setDeviceMetricsOverride', { width: 1440, height: 900, deviceScaleFactor: 1, mobile: false });
+    try {
+      await page.clickEl(sentence('always returns HTTP 200'));
+      await page.waitFor(TEXTBOX);
+      await page.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'End', code: 'End', windowsVirtualKeyCode: 35, modifiers: 4 });
+      await page.type(' Unless nothing was ingested.');
+      await page.key('Enter');
+      await page.waitFor(`!${TEXTBOX}`);
+      await page.eval(`[...document.querySelectorAll('textarea[aria-label^="Reply to maya-chen"]')].find((t) => t.offsetParent).focus()`);
+      await page.type('Agreed, switching to 502.');
+
+      // dkowalski's note sits beside "The SELECT takes no row lock", in the next section.
+      const offset = `(() => { const n = document.querySelector('aside[data-for]:not([hidden])[data-for="' + ${sentence('takes no row lock')}.closest('[data-clause]').dataset.clause + '"]'); return Math.round(n.getBoundingClientRect().top - ${sentence('takes no row lock')}.closest('[data-clause]').getBoundingClientRect().top); })()`;
+      const aligned = await page.eval<number>(offset);
+
+      assert.equal(await page.eval<string>(`${heading('Failure Reporting')}.getAttribute('aria-expanded')`), 'true');
+      assert.equal(await page.eval<string>(`${heading('Failure Reporting')}.textContent`), '▾Failure Reporting');
+      await page.clickEl(heading('Failure Reporting'));
+      await page.waitFor(`${heading('Failure Reporting')}.getAttribute('aria-expanded') === 'false'`);
+      assert.equal(await page.eval<string>(`${heading('Failure Reporting')}.textContent`), '▸Failure Reporting3 sentences · 1 edit · 1 comment');
+      assert.equal(await page.eval<boolean>(`${sentence('always returns HTTP 200')}.offsetParent === null`), true, 'its sentences are hidden');
+      assert.equal(await page.eval<boolean>(`[...document.querySelectorAll('aside[data-for]')].some((n) => !n.hidden && n.innerText.includes('@maya-chen'))`), false, 'its margin note is hidden');
+      assert.ok(aligned > 0, 'unfolded, the note is pushed below the long thread above it');
+      assert.equal(await page.eval<number>(offset), 0, 'folded, that thread is gone and the note rises level with its sentence, in the same frame');
+      assert.match(await page.eval<string>(`document.querySelector('header').innerText`), /1 edit\b/, 'the edit still counts');
+
+      await page.clickEl(`[...document.querySelectorAll('header button')].find((b) => b.textContent === 'Sync')`);
+      await page.waitFor(`document.querySelector('[data-view=sync] textarea')`);
+      const sheet = await page.eval<string>(`document.querySelector('[data-view=sync]').innerText`);
+      assert.match(sheet, /spec\.diff · 1 sentence/i);
+      assert.match(sheet, /Unless nothing was ingested/, 'a folded edit is still in spec.diff');
+      assert.equal(await page.eval<string>(`document.querySelector('[data-view=sync] textarea').value`), 'Agreed, switching to 502.', 'a folded reply is still there');
+      await page.eval('history.back()');
+      await page.waitFor(`!document.querySelector('[data-view=sync]')`);
+
+      assert.equal(await page.eval<string>(`${heading('Failure Reporting')}.getAttribute('aria-expanded')`), 'false', 'still folded after Sync and Back');
+      await page.clickEl(heading('Failure Reporting'));
+      await page.waitFor(`${sentence('always returns HTTP 200')}.offsetParent !== null`);
+      assert.match(await page.eval<string>(`${sentence('always returns HTTP 200')}.textContent`), /Unless nothing was ingested/);
+      assert.equal(await page.eval<number>(offset), aligned, 'unfolded, it is back where it was');
+    } finally {
+      await page.send('Emulation.clearDeviceMetricsOverride', {});
+    }
+  });
+
+  test('narrow: folding hides the inline comments too, and the page never scrolls sideways', async () => {
+    await fresh();
+    await page.send('Emulation.setDeviceMetricsOverride', { width: 600, height: 800, deviceScaleFactor: 1, mobile: false });
+    try {
+      const inline = `[...document.querySelectorAll('[data-clause] aside')].find((a) => a.innerText.includes('@maya-chen'))`;
+      assert.equal(await page.eval<boolean>(`${inline}.offsetParent !== null`), true);
+      await page.clickEl(heading('Failure Reporting'));
+      await page.waitFor(`${inline}.offsetParent === null`);
+      await page.clickEl(heading('Job Claiming'));
+      await page.waitFor(`${heading('Job Claiming')}.getAttribute('aria-expanded') === 'false'`);
+      const gap = await page.eval<number>(`${heading('Job Claiming')}.getBoundingClientRect().top - ${heading('Failure Reporting')}.getBoundingClientRect().bottom`);
+      assert.ok(gap <= 24, `two folded sections sit close together (${gap}px)`);
+      assert.equal(await page.eval<number>('document.documentElement.scrollWidth - innerWidth'), 0);
+      await page.clickEl(heading('Failure Reporting'));
+      await page.waitFor(`${inline}.offsetParent !== null`);
+    } finally {
+      await page.send('Emulation.clearDeviceMetricsOverride', {});
+    }
+  });
+
+  test('jumping from the Files list into a folded section opens it first', async () => {
+    await fresh();
+    await page.clickEl(heading('Job Claiming'));
+    await page.waitFor(`${heading('Job Claiming')}.getAttribute('aria-expanded') === 'false'`);
+    await page.eval('window.scrollTo(0, 0)');
+    await page.clickEl(`[...document.querySelectorAll('header button')].find((b) => / files?$/.test(b.textContent))`);
+    await page.waitFor(`document.querySelector('[role=menu][aria-label="Changed files"]')`);
+    await page.clickEl(`[...document.querySelectorAll('[role=menuitem]')].find((b) => b.textContent.startsWith('jobs.py'))`);
+    await page.waitFor(`document.activeElement?.dataset.file === 'services/ingest/jobs.py'`);
+    assert.equal(await page.eval<string>(`${heading('Job Claiming')}.getAttribute('aria-expanded')`), 'true');
+    await page.waitFor(`(() => { const r = document.activeElement.getBoundingClientRect(); return r.height > 0 && r.top > 48 && r.bottom < innerHeight; })()`);
+  });
+
   test('Refresh reloads in place and keeps unsaved redlines', async () => {
     await fresh();
     await page.clickEl(sentence('always returns HTTP 200'));

@@ -74,6 +74,7 @@ The page opens right away and loads in place. While a spec is being written or t
 
 - **Switch PRs** by clicking the PR title. It lists the repo's open PRs (`gh pr list`) and **Local branch diff**. A PR that isn't checked out loads from `gh pr diff`, read-only, so you can read it and reply, but Run is off until you `gh pr checkout` it and Refresh. redline never fetches or checks out for you.
 - **Refresh** re-reads the current diff and comments without restarting. Unsaved redlines are kept.
+- **Fold a section** by clicking its heading once you've read it. A folded heading keeps a count (`5 sentences · 1 edit · 2 comments`). Folding only changes the view: the section's edits and replies still go to Sync, and a new spec opens with every section unfolded.
 - **N files** in the top bar lists the diff's files by directory, with their added and removed lines. Click one to jump to the first sentence about it. Every anchor shows its full path, the directory in lighter ink (`services/ingest/handler.py:20–24`).
 - **Re-analyze diff** appears when a run finishes ("Synced — 2 files modified in 18s", with the files and the diff). It writes a fresh spec of the changed code and clears the redlines that were just applied, so you can check the agent's work and keep going.
 - With no PR and no local changes, the page says so and opens the PR list instead of exiting. Without GitHub (no remote, a non-GitHub host, or no `gh`), it simply reviews the local diff.

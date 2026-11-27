@@ -2,6 +2,7 @@ import { useLayoutEffect, useRef, useState } from 'react';
 import type { MarginComment, SpecDocument } from '../../../shared/types';
 import { COLUMNS, TWO_COLUMNS } from '../grid';
 import { layoutNotes } from '../layout';
+import { sectionSummary } from '../sections';
 import type { Action } from '../state';
 import { Clause } from './Clause';
 import { Margin } from './Margin';
@@ -11,6 +12,9 @@ interface Props {
   dispatch: (action: Action) => void;
   onReply: (commentId: string, text: string) => void;
   onStatus: (commentId: string, status: MarginComment['status']) => void;
+  /** Sections folded away. Only the view: their sentences, edits and replies are all still synced. */
+  folded: ReadonlySet<string>;
+  onToggle: (sectionId: string) => void;
 }
 
 const GAP = 16;
@@ -21,7 +25,7 @@ const GAP = 16;
  * past each other), so nothing in the margin can ever open a gap in the text. Below
  * 860px comments follow their sentence inline, under a quiet hairline.
  */
-export function SpecBody({ doc, dispatch, onReply, onStatus }: Props) {
+export function SpecBody({ doc, dispatch, onReply, onStatus, folded, onToggle }: Props) {
   const prose = useRef<HTMLDivElement>(null);
   const rail = useRef<HTMLDivElement>(null);
   const [linked, setLinked] = useState<string | null>(null);
@@ -29,6 +33,8 @@ export function SpecBody({ doc, dispatch, onReply, onStatus }: Props) {
   const byClause = new Map<string, MarginComment[]>();
   for (const c of doc.comments) byClause.set(c.clauseId, [...(byClause.get(c.clauseId) ?? []), c]);
   const noted = doc.sections.flatMap((s) => s.clauses).filter((c) => byClause.has(c.id));
+  const foldedClauses = new Set(doc.sections.filter((s) => folded.has(s.id)).flatMap((s) => s.clauses.map((c) => c.id)));
+  const placeNow = useRef<() => void>(() => undefined);
 
   useLayoutEffect(() => {
     const proseEl = prose.current;
@@ -39,7 +45,8 @@ export function SpecBody({ doc, dispatch, onReply, onStatus }: Props) {
     const place = (): void => {
       if (!wide.matches) return;
       const base = proseEl.getBoundingClientRect().top;
-      const notes = [...railEl.querySelectorAll<HTMLElement>('[data-for]')];
+      // A folded section's notes are hidden and take no room.
+      const notes = [...railEl.querySelectorAll<HTMLElement>('[data-for]')].filter((note) => !note.hidden);
       const boxes = notes.map((note) => {
         const sentence = proseEl.querySelector<HTMLElement>(`[data-clause="${CSS.escape(note.dataset.for ?? '')}"]`);
         return { want: sentence ? sentence.getBoundingClientRect().top - base : 0, height: note.offsetHeight };
@@ -49,6 +56,8 @@ export function SpecBody({ doc, dispatch, onReply, onStatus }: Props) {
       // Only the end of the page can grow, if the last notes run past the last sentence.
       railEl.style.minHeight = `${Math.max(0, ...boxes.map((b, i) => (tops[i] ?? 0) + b.height))}px`;
     };
+
+    placeNow.current = place;
 
     // At most once a frame: a window drag fires many resizes, and each placement reads the
     // final layout of that frame (every sentence's new top), so notes don't drift or jitter.
@@ -75,6 +84,11 @@ export function SpecBody({ doc, dispatch, onReply, onStatus }: Props) {
     };
   }, [doc]);
 
+  // Folding moves every sentence below it at once: re-place before the browser paints, so the
+  // notes never show a frame in their old spots.
+  const foldKey = [...folded].sort().join(' ');
+  useLayoutEffect(() => placeNow.current(), [foldKey]);
+
   const link = (id: string) => ({
     onMouseEnter: () => setLinked(id),
     onMouseLeave: () => setLinked((cur) => (cur === id ? null : cur)),
@@ -86,9 +100,26 @@ export function SpecBody({ doc, dispatch, onReply, onStatus }: Props) {
     <div className={COLUMNS}>
       <div ref={prose} className="min-w-0 [overflow-wrap:break-word]">
         {doc.sections.map((section) => (
-          <section key={section.id} className="mb-9">
-            <h2 className="mb-4 text-[13px] font-semibold uppercase tracking-[0.07em] text-ink">{section.title}</h2>
-            <div className="space-y-5">
+          <section key={section.id} className={folded.has(section.id) ? 'mb-4' : 'mb-9'}>
+            <h2 className={folded.has(section.id) ? '' : 'mb-4'}>
+              <button
+                type="button"
+                aria-expanded={!folded.has(section.id)}
+                aria-controls={`section-${section.id}`}
+                onClick={() => onToggle(section.id)}
+                className="group flex w-full cursor-pointer flex-wrap items-baseline gap-x-3 text-left"
+              >
+                <span className="flex min-w-0 items-baseline gap-2 text-[13px] font-semibold uppercase tracking-[0.07em] text-ink">
+                  <span aria-hidden="true" className="w-3 shrink-0 text-[11px] text-faint group-hover:text-muted">
+                    {folded.has(section.id) ? '▸' : '▾'}
+                  </span>
+                  {section.title}
+                </span>
+                {folded.has(section.id) && <span className="text-[12.5px] text-muted tabular-nums">{sectionSummary(section, doc.comments)}</span>}
+              </button>
+            </h2>
+            {/* Hidden, not unmounted: a half-typed edit, an open peek, or a reply draft survives folding. */}
+            <div id={`section-${section.id}`} hidden={folded.has(section.id)} className="space-y-5">
               {section.clauses.map((clause) => {
                 const own = byClause.get(clause.id) ?? [];
                 return (
@@ -113,7 +144,7 @@ export function SpecBody({ doc, dispatch, onReply, onStatus }: Props) {
       </div>
       <div ref={rail} className="relative hidden min-w-0 split:block">
         {noted.map((clause) => (
-          <aside key={clause.id} data-for={clause.id} className="absolute inset-x-0 pt-0.5" {...link(clause.id)}>
+          <aside key={clause.id} data-for={clause.id} hidden={foldedClauses.has(clause.id)} className="absolute inset-x-0 pt-0.5" {...link(clause.id)}>
             <Margin comments={byClause.get(clause.id) ?? []} linked={linked === clause.id} onReply={onReply} onStatus={onStatus} />
           </aside>
         ))}
