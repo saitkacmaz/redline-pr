@@ -1,0 +1,49 @@
+# Typecheck and test on every push to main and every pull request, on each OS and supported
+# Node version, so a break on Windows or an older Node shows up before a release does.
+name: CI
+
+on:
+  push:
+    branches: [main]
+    paths-ignore: ['**.md']
+  pull_request:
+    paths-ignore: ['**.md']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: ${{ matrix.os }} · Node ${{ matrix.node }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        node: [20, 22, 24]
+    env:
+      # test/browser.ts only probes macOS and Linux paths; without this the browser tests
+      # would skip on Windows instead of running.
+      CHROME_PATH: ${{ matrix.os == 'windows-latest' && 'C:\Program Files\Google\Chrome\Application\chrome.exe' || '' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      - run: npm ci
+
+      # Ubuntu 24.04 blocks the unprivileged namespaces Chrome's sandbox needs; the browser
+      # tests would otherwise fail here (not on users' machines).
+      - if: runner.os == 'Linux'
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+
+      - run: npm run typecheck
+      - run: npm test
