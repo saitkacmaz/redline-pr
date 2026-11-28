@@ -92,7 +92,7 @@ The page opens right away and loads in place. While a spec is being written or t
 - **Re-analyze diff** appears when a run finishes ("Synced — 2 files modified in 18s", with the files and the diff). It writes a fresh spec of the changed code and clears the redlines that were just applied, so you can check the agent's work and keep going.
 - With no PR and no local changes, the page says so and opens the PR list instead of exiting. Without GitHub (no remote, a non-GitHub host, or no `gh`), it simply reviews the local diff.
 - **Sync** is a page of its own (`#sync`). The browser's Back button, Esc, or **← Back to spec** returns to the spec where you left it, edits and scroll position intact.
-- **The margin** holds only open review threads, one item per thread: the opening comment and the latest reply, with a toggle to read the whole thread in place. A thread you answered last is marked *replied* (it's waiting on the reviewer). Resolved and outdated threads are left out of the margin and out of the agent's prompt; a single muted line at the bottom (`2 resolved/outdated hidden`) shows them if you want to look. Notes sit level with their sentence and cascade below each other when they run long; they never push the sentences apart. Hovering a note marks its sentence, and the other way round. The layout follows the window: beside an editor in a split screen the two columns narrow together, and below 860px each thread sits directly under its sentence. The page never scrolls sideways.
+- **The margin** holds only open review threads, one item per thread: the opening comment and the latest reply, with a toggle to read the whole thread in place. A thread you answered last is marked *replied* (it's waiting on the reviewer). Comments show their Markdown: bold, italics, inline code, links, and code blocks such as GitHub suggestions; any HTML in a comment is shown as plain text. Resolved and outdated threads are left out of the margin and out of the agent's prompt; a single muted line at the bottom (`2 resolved/outdated hidden`) shows them if you want to look. Notes sit level with their sentence and cascade below each other when they run long; they never push the sentences apart. Hovering a note marks its sentence, and the other way round. The layout follows the window: beside an editor in a split screen the two columns narrow together, and below 860px each thread sits directly under its sentence. The page never scrolls sideways.
 
 | Flag | Meaning |
 | --- | --- |
@@ -237,13 +237,21 @@ server/
   prompts.ts       spec system prompt + surgical execution prompt
   spec.ts          the spec call (any agent), schema validation, anchor/comment assembly, cache
   sync.ts          spec.diff, edit merging, export, agent runs and what they changed, reply posting
-  git.ts diff.ts   diff collection and unified-diff parsing
+  git.ts diff.ts   diff collection, unified-diff parsing, per-file line counts
+  schema.ts        request and spec validation (zod)
+  exec.ts          run(): every child process, no shell, killed with redline
+  paths.ts         the repo's cache directory
   platform.ts      macOS / Linux / Windows differences: cache root, PATH lookup, .cmd shims, browser
   cli-args.ts      redline [claude|codex] [<pr>] [flags], in any order
   github.ts        PRs, review threads (GraphQL, resolved/outdated triage), comments, reply posting
   demo.ts          pre-baked demo PR
 shared/types.ts    the data contract between server and web
-web/src/           React + Tailwind UI (layout.ts: margin-note placement)
+web/src/           React + Tailwind UI
+  grid.ts          the three-tier layout shared by every row
+  layout.ts        margin-note placement (the collision solver)
+  markdown.ts      comment Markdown → tokens, never HTML
+  paths.ts         path splitting and the Files list tree
+  sections.ts      section folding and its one-line summary
 ```
 
 ### License

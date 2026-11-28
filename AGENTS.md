@@ -90,7 +90,7 @@ Don't add colors. Tints of `ink` (such as `bg-ink/[0.04]` for hover) are the onl
      - Codex: everything it needs on disk lives under the cache. That is the strict schema in `<cache root>/schemas/spec-schema.json`, plus a per-run scratch dir and `--output-last-message` file under the repo's cache directory, all removed after the run.
 2. **Read-only until Sync.**
    - Launching, loading, switching PRs, refreshing, and reviewing never change the repo and never post to GitHub.
-   - Only an explicit **Run** in the Sync view may edit files (through Claude Code). Only an explicit **Post replies** may write to GitHub, and only the replies the human wrote, once each.
+   - Only an explicit **Run** in the Sync view may edit files (through Claude Code or Codex). Only an explicit **Post replies** may write to GitHub, and only the replies the human wrote, once each.
 3. **Subscription-first.**
    - All model calls go through a local agent CLI and the user's existing login: `claude -p` (Claude Code) or `codex exec` (Codex, ChatGPT login).
    - Never use `--bare`, `ANTHROPIC_API_KEY` or `OPENAI_API_KEY`. Never call a model API directly, and never add an API-key path or an `anthropic`/`openai` SDK dependency.
@@ -113,6 +113,7 @@ Don't add colors. Tints of `ink` (such as `bg-ink/[0.04]` for hover) are the onl
    - Each open thread is one margin item.
 6. **Local and safe by default.**
    - The server binds to `127.0.0.1` only. Every API call needs the per-launch page token, and Host and Origin are checked.
+   - Review comments are untrusted text. The margin renders their Markdown through `web/src/markdown.ts` into React elements, never as HTML (no `dangerouslySetInnerHTML`), and links only `http(s)` URLs, opened with `rel="noopener noreferrer"`.
    - Child processes are spawned without a shell, in their own process group (a `taskkill` tree on Windows), and are killed with redline.
 7. **macOS, Linux and Windows.** Anything platform-specific lives in `server/platform.ts`, as a pure function of the platform, with a test for each branch.
    - **Finding a CLI.** Search PATH directly (with PATHEXT on Windows) instead of spawning `which` or `where`.
