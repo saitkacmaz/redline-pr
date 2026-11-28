@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { delimiter, dirname, join, relative } from 'node:path';
+import { delimiter, dirname, join, relative, sep } from 'node:path';
 import { findExecutable } from '../server/platform.js';
 
 const created: string[] = [];
@@ -10,9 +10,12 @@ process.on('exit', () => {
   for (const dir of created) rmSync(dir, { recursive: true, force: true });
 });
 
-/** A fresh directory in the OS temp dir, removed when the test process exits. */
+/**
+ * A fresh directory in the OS temp dir, removed when the test process exits. Resolved with
+ * the native realpath, which expands Windows short names (RUNNER~1) the way git prints them.
+ */
 export function tempDir(prefix: string): string {
-  const dir = realpathSync(mkdtempSync(join(tmpdir(), `redline-test-${prefix}-`)));
+  const dir = realpathSync.native(mkdtempSync(join(tmpdir(), `redline-test-${prefix}-`)));
   created.push(dir);
   return dir;
 }
@@ -69,14 +72,14 @@ export function installBin(binDir: string, name: string, script: string): string
 /** `dirs` in front of the current PATH. */
 export const prependPath = (...dirs: string[]): string => [...dirs, process.env.PATH ?? ''].join(delimiter);
 
-/** sha256 of every file under `root`, including .git, keyed by relative path. */
+/** sha256 of every file under `root`, including .git, keyed by relative path with `/` separators. */
 export function snapshot(root: string): Map<string, string> {
   const out = new Map<string, string>();
   const walk = (dir: string): void => {
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
       const path = join(dir, entry.name);
       if (entry.isDirectory()) walk(path);
-      else out.set(relative(root, path), createHash('sha256').update(readFileSync(path)).digest('hex'));
+      else out.set(relative(root, path).split(sep).join('/'), createHash('sha256').update(readFileSync(path)).digest('hex'));
     }
   };
   walk(root);

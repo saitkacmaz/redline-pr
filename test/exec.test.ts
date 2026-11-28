@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { run } from '../server/exec.js';
+import { findExecutable } from '../server/platform.js';
 
 test('a timeout stops a process that ignores SIGTERM and is never reported as success', async () => {
   const started = Date.now();
@@ -26,11 +27,10 @@ test('stdin is delivered and exit codes pass through', async () => {
   assert.equal(res.timedOut, false);
 });
 
-test('a timeout still fires when the leader exited but a descendant holds the pipes', async () => {
+// sh is everywhere but Windows, where Git Bash provides it (and agents' shell tools use it).
+test('a timeout still fires when the leader exited but a descendant holds the pipes', { skip: !findExecutable('sh') }, async () => {
   const started = Date.now();
-  // The leader starts a grandchild that inherits its pipes, prints, and exits at once.
-  const grandchild = `require('node:child_process').spawn(process.execPath, ['-e', 'setTimeout(() => {}, 30000)'], { stdio: 'inherit' }).unref(); console.log('hi')`;
-  const res = await run(process.execPath, ['-e', grandchild], { timeoutMs: 400 });
+  const res = await run('sh', ['-c', 'sleep 30 & echo hi'], { timeoutMs: 400 });
   assert.equal(res.timedOut, true);
   assert.ok(Date.now() - started < 3000, `took ${Date.now() - started}ms`);
 });

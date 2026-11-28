@@ -64,7 +64,16 @@ export class Browser {
     };
   }
 
+  /** Start headless Chrome, trying twice: a cold CI runner sometimes misses the first start. */
   static async launch(): Promise<Browser> {
+    try {
+      return await Browser.start();
+    } catch {
+      return Browser.start();
+    }
+  }
+
+  private static async start(): Promise<Browser> {
     if (!chromePath) throw new Error('no Chrome found');
     const port = await freePort();
     const chrome = spawn(
@@ -74,7 +83,7 @@ export class Browser {
       { stdio: 'ignore' },
     );
     let target: { type: string; webSocketDebuggerUrl: string } | undefined;
-    for (let i = 0; i < 100 && !target; i++) {
+    for (let i = 0; i < 300 && !target; i++) {
       await sleep(100);
       try {
         const list = (await (await fetch(`http://127.0.0.1:${port}/json`)).json()) as { type: string; webSocketDebuggerUrl: string }[];
@@ -83,7 +92,11 @@ export class Browser {
         // Chrome is still starting.
       }
     }
-    if (!target) throw new Error('Chrome did not start');
+    if (!target) {
+      // A Chrome left running would keep the test process alive until the CI job times out.
+      chrome.kill('SIGKILL');
+      throw new Error('Chrome did not start');
+    }
     const ws = new WebSocket(target.webSocketDebuggerUrl);
     await new Promise((resolve, reject) => {
       ws.onopen = resolve;

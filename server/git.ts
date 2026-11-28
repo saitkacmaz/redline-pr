@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { run as exec, runOk as execOk, type RunOptions } from './exec.js';
 
 /**
@@ -59,8 +59,9 @@ export async function headCommit(cwd: string): Promise<string> {
   return (await runOk('git', ['rev-parse', 'HEAD'], { cwd })).trim();
 }
 
+/** The repo's top folder in the platform's own form: git prints `C:/work/repo` on Windows. */
 export async function repoRoot(cwd: string): Promise<string> {
-  return (await runOk('git', ['rev-parse', '--show-toplevel'], { cwd })).trim();
+  return resolve((await runOk('git', ['rev-parse', '--show-toplevel'], { cwd })).trim());
 }
 
 export async function currentBranch(cwd: string): Promise<string> {

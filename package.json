@@ -41,7 +41,7 @@
     "start": "node dist/bin/cli.js",
     "install-global": "npm run build && npm link",
     "prepublishOnly": "npm run build",
-    "test": "node --import tsx --test --test-reporter=spec \"test/**/*.test.ts\"",
+    "test": "node --import tsx --test --test-timeout=120000 --test-reporter=spec \"test/**/*.test.ts\"",
     "pretest": "npm run build"
   },
   "dependencies": {

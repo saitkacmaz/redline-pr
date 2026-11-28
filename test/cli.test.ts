@@ -148,7 +148,7 @@ test('live run: read-only until Sync, then only the code edit lands in the repo'
     assert.match(result.changes?.diff ?? '', /^\+\/\/ edited by fake claude$/m);
     assert.equal(result.agent?.sessionId, 'fake-session-1', 'the run names its Claude Code session');
     assert.equal(result.agent?.resume, `cd ${repo} && claude --resume fake-session-1`);
-    assert.match(readFileSync(join(cache, 'redline-pr', readdirSync(join(cache, 'redline-pr'))[0]!, 'last-run.md'), 'utf8'), new RegExp(`cd ${repo} && claude --resume fake-session-1`));
+    assert.ok(readFileSync(join(cache, 'redline-pr', readdirSync(join(cache, 'redline-pr'))[0]!, 'last-run.md'), 'utf8').includes(`cd ${repo} && claude --resume fake-session-1`));
     const syncCall = readCalls(logFile).at(-1)!;
     assert.equal(syncCall.cwd, repo);
     assert.match(syncCall.input, /REQUIRED behavior: If adding throws, `add` rethrows the error\./);
@@ -536,7 +536,10 @@ test('/api/events streams the real steps of a load and a run', async () => {
   const r = await boot([], { cwd: repo, env: { XDG_CACHE_HOME: tempDir('cache'), PATH: prependPath(binDir) } });
   try {
     const { doc } = await ready(r);
-    const loadSteps = (await events(r, () => api(r, '/api/load', { target: { kind: 'current' } })))
+    const loadSteps = (await events(r, async () => {
+      await api(r, '/api/load', { target: { kind: 'current' } });
+      await settled(r);
+    }))
       .flatMap((e) => (e.type === 'activity' ? [`${e.activity.state}:${e.activity.step}`] : []));
     assert.ok(loadSteps.includes('running:Reading the diff of feat against main'), loadSteps.join('\n'));
     assert.ok(loadSteps.at(-1)?.startsWith('done:Ready'), loadSteps.join('\n'));
@@ -589,7 +592,7 @@ test('with only codex installed, redline uses it, read-only, leaving its schema 
     assert.equal(after(args, '--sandbox'), 'read-only');
     assert.equal(args.at(-1), '-', 'the prompt arrives on stdin');
     assert.match(spec.input, /You reverse-engineer a code diff/);
-    assert.match(spec.input, new RegExp(`Repository: ${repo}`));
+    assert.ok(spec.input.includes(`Repository: ${repo}`), spec.input.slice(-300));
 
     // Zero trace: the schema, the answer file and Codex's working directory are all under the cache.
     const root = join(cache, 'redline-pr');
