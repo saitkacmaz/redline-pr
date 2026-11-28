@@ -20,8 +20,12 @@ export function tempDir(prefix: string): string {
   return dir;
 }
 
+/**
+ * Git for test setup. Auto-maintenance is off: newer git runs it detached after a commit, and
+ * its lock file would land in .git while a test is asserting nothing there changed.
+ */
 export function git(cwd: string, ...args: string[]): string {
-  return execFileSync('git', args, {
+  return execFileSync('git', ['-c', 'maintenance.auto=false', '-c', 'gc.auto=0', ...args], {
     cwd,
     encoding: 'utf8',
     env: { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' },
