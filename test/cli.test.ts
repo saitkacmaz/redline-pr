@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, sep } from 'node:path';
 import type { PrListResponse, SyncResult } from '../shared/types.js';
 import { api, boot, childEnv, events, fakeGh, fakeGhWithPr, rawPost, ready, runCli, settled } from './cli-harness.js';
 import { request } from 'node:http';
@@ -568,7 +568,7 @@ test('/api/events streams the real steps of a load and a run', async () => {
 type CodexCall = { args: string[]; cwd: string; input: string; schema: Record<string, unknown> | null };
 const codexCalls = (logFile: string): CodexCall[] => readCalls(logFile) as CodexCall[];
 const after = (args: string[], flag: string): string | undefined => (args.includes(flag) ? args[args.indexOf(flag) + 1] : undefined);
-const isInside = (path: string, dir: string): boolean => path === dir || path.startsWith(`${dir}/`);
+const isInside = (path: string, dir: string): boolean => path === dir || path.startsWith(`${dir}${sep}`);
 
 test('with only codex installed, redline uses it, read-only, leaving its schema and scratch files only under the cache', async () => {
   const repo = makeRepo();

@@ -98,10 +98,15 @@ export class Browser {
       throw new Error('Chrome did not start');
     }
     const ws = new WebSocket(target.webSocketDebuggerUrl);
-    await new Promise((resolve, reject) => {
-      ws.onopen = resolve;
-      ws.onerror = reject;
-    });
+    try {
+      await new Promise((resolve, reject) => {
+        ws.onopen = resolve;
+        ws.onerror = reject;
+      });
+    } catch (err) {
+      chrome.kill('SIGKILL');
+      throw err;
+    }
     const browser = new Browser(chrome, ws);
     await browser.send('Page.enable');
     await browser.send('Runtime.enable');
