@@ -26,7 +26,7 @@ A coding agent writes an 800-line PR in minutes. Reviewing it means either rever
 - **Read-only until Sync.** Nothing in the repo changes, and nothing posts to GitHub, until you ask. `redline` never commits or pushes.
 - **Any Git repo.** PRs and review comments come through `gh` on GitHub; on GitLab, Bitbucket, or a repo with no remote, you review the local branch diff.
 - **No stale comments.** Resolved and outdated threads are filtered out deterministically using GitHub's own flags, not a model.
-- **Cross-platform.** Fits a split-screen window and runs on macOS, Linux, and Windows. Linux and Windows are covered by unit tests; day-to-day use so far is on macOS.
+- **Cross-platform.** Fits a split-screen window and runs on macOS, Linux, and Windows. CI runs the full test suite, browser tests included, on all three with Node 22 and 24 (one Ctrl-C test is skipped on Windows); day-to-day use so far is on macOS.
 
 </td></tr></table>
 
@@ -181,7 +181,7 @@ The one exception is what you ask for: **Run** lets the agent edit source files 
 
 ### macOS, Linux and Windows
 
-Everything platform-specific lives in [`server/platform.ts`](server/platform.ts). redline is used daily on macOS; the Linux and Windows code paths are covered by unit tests that run each branch on any machine.
+Everything platform-specific lives in [`server/platform.ts`](server/platform.ts). redline is used daily on macOS. [CI](.github/workflows/ci.yml) runs the full suite on macOS, Linux and Windows (Node 22 and 24) on every push and pull request, and unit tests also run each platform branch on any machine.
 
 - **Finding the CLIs.** `claude`, `codex`, `git` and `gh` are found on `PATH` directly (with `PATHEXT` on Windows), without spawning `which` or `where`.
 - **Windows shims.** On Windows, npm's `.cmd` shims for `claude` and `codex` run as node plus the script they wrap. Prompts still go over stdin, and arguments with newlines or quotes arrive intact. Process trees are stopped with `taskkill /T`.
