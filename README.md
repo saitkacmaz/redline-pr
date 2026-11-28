@@ -36,18 +36,31 @@ Everything below is the detail: install, commands, flags, how it works, and the 
 
 ### Install
 
-redline-pr isn't on npm yet. Install it from source once, then use the `redline` command in any repo:
-
 ```
-git clone https://github.com/saitkacmaz/redline-pr.git && cd redline-pr
-npm install
-npm run install-global   # builds dist/ and links the global `redline` command
+npm install -g redline-pr
 redline --demo           # try it without a repo
 cd ~/work/some-repo
 redline
 ```
 
-To update, run `git pull && npm install && npm run build` in the cloned folder.
+`-g` installs the `redline` command globally, on your `PATH`. Without it, npm would add `node_modules/` to whatever folder you're in. To try it without installing: `npx redline-pr --demo`.
+
+To update: `npm install -g redline-pr@latest`.
+
+Releases are published from this repo's GitHub Actions with npm provenance, so npm can show which commit each version was built from.
+
+<details>
+<summary>From source</summary>
+
+```
+git clone https://github.com/saitkacmaz/redline-pr.git && cd redline-pr
+npm install
+npm run install-global   # builds dist/ and links the global `redline` command
+```
+
+To update a source install, run `git pull && npm install && npm run build` in that folder.
+
+</details>
 
 The command is also installed as `redline-pr`, if `redline` clashes with something on your machine.
 
@@ -203,6 +216,8 @@ Running from source (`npx tsx bin/cli.ts`) still serves the page from the built 
 `npm test` never calls the real `claude`, `codex`, or GitHub: integration tests put fake `claude`, `codex`, and `gh` binaries on `PATH` and run the built CLI against throwaway repos, checking every byte of each repo (`.git` included) before and after. Browser tests drive headless Chrome and are skipped if Chrome or Chromium isn't installed (set `CHROME_PATH` to point at one).
 
 Working on redline with a coding agent? [`AGENTS.md`](AGENTS.md) is the contract it must follow (design rules and the invariants above). `CLAUDE.md` points Claude Code at it.
+
+**Releasing.** Bump the version and push the tag: `npm version patch && git push --follow-tags`. The `v*` tag triggers [`.github/workflows/publish.yml`](.github/workflows/publish.yml), which typechecks, tests, and publishes to npm through trusted publishing (no npm token exists). A tag that doesn't match `package.json` fails the run.
 
 For hot reload on the UI, run the server with a fixed token and point Vite at it:
 

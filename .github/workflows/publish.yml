@@ -1,0 +1,45 @@
+# Publish to npm when a version tag (v0.1.1) is pushed. Trusted publishing: npm verifies this
+# workflow by its GitHub OIDC identity, so no npm token is stored anywhere, and the package
+# gets a provenance statement linking it to this commit.
+name: Publish
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+  id-token: write # the OIDC token npm checks; nothing else can publish
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+
+      # Trusted publishing needs npm 11.5.1 or newer.
+      - run: npm install -g npm@latest
+
+      - name: Tag matches package.json
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "Tag $GITHUB_REF_NAME doesn't match package.json version $version."
+            exit 1
+          fi
+
+      - run: npm ci
+
+      # Ubuntu 24.04 blocks the unprivileged namespaces Chrome's sandbox needs; the browser
+      # tests would otherwise fail here (not on users' machines).
+      - run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+
+      - run: npm run typecheck
+      - run: npm test
+
+      - run: npm publish
