@@ -23,7 +23,7 @@ redline-pr helps a human **understand** an AI-written pull request and **judge**
 | `muted` | `#6B6B68` | secondary text                     |
 | `rule`  | `#E6E6E3` | 1px hairlines                      |
 | `edge`  | `#D4D4D0` | outline of a secondary button      |
-| `faint` | `#A3A39E` | text of an unavailable button      |
+| `faint` | `#A3A39E` | unavailable buttons, directory part of a path, fold triangles |
 | `del`   | `#B91C1C` | deletions and errors only          |
 | `ins`   | `#15803D` | insertions only (or `ink`)         |
 
@@ -59,6 +59,9 @@ Don't add colors. Tints of `ink` (such as `bg-ink/[0.04]` for hover) are the onl
   - Margin notes are absolutely positioned by the collision solver in `web/src/layout.ts`: `top = max(targetTop, prevBottom + 16)`.
   - They are re-placed at most once per animation frame on any resize of the prose, the margin, a note, or the window, so dragging a window edge never makes them drift or jitter.
   - A note, a thread, or an expanded reply must never change the height of the prose or open a gap between sentences. `test/layout.test.ts` and the UI tests guard this. Keep them passing.
+- **Paths.** Every file path (anchors, peeks, margin, Sync) renders through `PathLabel`: the directory in `faint`, the file name and lines in the surrounding color. The full path is always shown, never shortened.
+- **Files list.** "N files" in the top bar opens a flat popover: the diff's files indented by directory (single-child directories folded into one line), with `+N`/`-N` counts. Picking a file scrolls to the first sentence about it, unfolding its section if needed. Files no sentence points at are muted and not clickable.
+- **Folding.** A section heading is a button (`aria-expanded`) that folds its sentences into a one-line summary ("5 sentences · 1 edit · 2 comments"). Folded content stays mounted with `hidden`, so edits and replies survive and still reach Sync; its margin notes leave the solver. Fold state is per spec and resets when the spec changes.
 - **Spacing.** 20px between sentences and 36px between sections.
 - **Run buttons.** The Sync view always shows **Run with Claude** and **Run with Codex** side by side, as plain words with no logos or icons.
   - The launch agent's button comes first and is solid ink (`bg-ink`, paper text, 3px radius, no shadow).
