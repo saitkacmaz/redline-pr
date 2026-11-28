@@ -1,6 +1,7 @@
-# Publish to npm when a version tag (v0.1.1) is pushed. Trusted publishing: npm verifies this
-# workflow by its GitHub OIDC identity, so no npm token is stored anywhere, and the package
-# gets a provenance statement linking it to this commit.
+# Publish to npm when a version tag (v0.1.1) is pushed, only after the full CI matrix (every
+# OS and Node version) passes on that commit. Trusted publishing: npm verifies this workflow
+# by its GitHub OIDC identity, so no npm token is stored anywhere, and the package gets a
+# provenance statement linking it to this commit.
 name: Publish
 
 on:
@@ -9,11 +10,31 @@ on:
 
 permissions:
   contents: read
-  id-token: write # the OIDC token npm checks; nothing else can publish
 
 jobs:
-  publish:
+  # Fail in seconds, before the matrix spends ten minutes, if the tag and version disagree.
+  version:
+    name: Tag matches package.json
     runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          version="$(node -p "require('./package.json').version")"
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "Tag $GITHUB_REF_NAME doesn't match package.json version $version."
+            exit 1
+          fi
+
+  ci:
+    needs: version
+    uses: ./.github/workflows/ci.yml
+
+  publish:
+    needs: [version, ci]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # the OIDC token npm checks; only this job can publish
     steps:
       - uses: actions/checkout@v4
 
@@ -25,21 +46,5 @@ jobs:
       # Trusted publishing needs npm 11.5.1 or newer.
       - run: npm install -g npm@latest
 
-      - name: Tag matches package.json
-        run: |
-          version="$(node -p "require('./package.json').version")"
-          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
-            echo "Tag $GITHUB_REF_NAME doesn't match package.json version $version."
-            exit 1
-          fi
-
       - run: npm ci
-
-      # Ubuntu 24.04 blocks the unprivileged namespaces Chrome's sandbox needs; the browser
-      # tests would otherwise fail here (not on users' machines).
-      - run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-
-      - run: npm run typecheck
-      - run: npm test
-
       - run: npm publish

@@ -1,19 +1,22 @@
 # Typecheck and test on every push to main and every pull request, on each OS and supported
 # Node version, so a break on Windows or an older Node shows up before a release does.
+# publish.yml calls this too, so nothing reaches npm without the same green matrix.
 name: CI
 
 on:
   push:
     branches: [main]
     paths-ignore: ['**.md']
+  # No paths-ignore here: "CI passed" is a required check on main, and a skipped workflow
+  # would leave a docs-only pull request waiting on it forever.
   pull_request:
-    paths-ignore: ['**.md']
+  workflow_call:
 
 permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ${{ github.workflow }}-ci-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -43,3 +46,17 @@ jobs:
 
       - run: npm run typecheck
       - run: npm test
+
+  # One stable check for the main-branch ruleset to require, whatever the matrix holds.
+  # It runs even when a test job fails, because a skipped required check counts as passed.
+  passed:
+    name: CI passed
+    needs: test
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - if: needs.test.result != 'success'
+        run: |
+          echo "The test matrix finished with: ${{ needs.test.result }}."
+          exit 1
+      - run: echo "Every OS and Node version passed."

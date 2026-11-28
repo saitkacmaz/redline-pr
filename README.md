@@ -217,7 +217,7 @@ Running from source (`npx tsx bin/cli.ts`) still serves the page from the built 
 
 Working on redline with a coding agent? [`AGENTS.md`](AGENTS.md) is the contract it must follow (design rules and the invariants above). `CLAUDE.md` points Claude Code at it.
 
-**Releasing.** Bump the version and push the tag: `npm version patch && git push --follow-tags`. The `v*` tag triggers [`.github/workflows/publish.yml`](.github/workflows/publish.yml), which typechecks, tests, and publishes to npm through trusted publishing (no npm token exists). A tag that doesn't match `package.json` fails the run.
+**Releasing.** Bump the version and push the tag: `npm version patch && git push --follow-tags`. The `v*` tag triggers [`.github/workflows/publish.yml`](.github/workflows/publish.yml), which runs the full CI matrix (every OS and Node version) and publishes to npm through trusted publishing only if all of it passes (no npm token exists). A tag that doesn't match `package.json` fails the run before the tests start. Pull requests into `main` need the **CI passed** check to merge.
 
 For hot reload on the UI, run the server with a fixed token and point Vite at it:
 
