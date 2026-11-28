@@ -32,6 +32,12 @@ function killGroup(child: ChildProcess, signal: NodeJS.Signals): void {
   if (process.platform === 'win32') {
     // No process groups on Windows: taskkill /T takes the whole tree (cmd.exe and what it started).
     if (child.exitCode === null) spawnSync('taskkill', ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
+    // Once the leader is gone taskkill can't find its tree, and a descendant may still hold
+    // our pipes: stop waiting on them, or the run would never finish.
+    else {
+      child.stdout?.destroy();
+      child.stderr?.destroy();
+    }
     return;
   }
   try {

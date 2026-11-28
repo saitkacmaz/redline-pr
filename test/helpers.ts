@@ -2,7 +2,8 @@ import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join, relative } from 'node:path';
+import { delimiter, dirname, join, relative } from 'node:path';
+import { findExecutable } from '../server/platform.js';
 
 const created: string[] = [];
 process.on('exit', () => {
@@ -46,6 +47,27 @@ export function makeRepo(): string {
   git(dir, 'commit', '-qam', 'feat');
   return dir;
 }
+
+/**
+ * Put a node script on PATH as the command `name`. POSIX: an executable file. Windows: the
+ * script plus an npm-style `.cmd` shim, which redline runs as node + script, exactly like
+ * a real npm-installed `claude` or `codex`. Returns the script's path.
+ */
+export function installBin(binDir: string, name: string, script: string): string {
+  if (process.platform !== 'win32') {
+    const file = join(binDir, name);
+    writeFileSync(file, script);
+    chmodSync(file, 0o755);
+    return file;
+  }
+  const file = join(binDir, `${name}.js`);
+  writeFileSync(file, script);
+  writeFileSync(join(binDir, `${name}.cmd`), `@ECHO off\r\nnode "%~dp0\\${name}.js" %*\r\n`);
+  return file;
+}
+
+/** `dirs` in front of the current PATH. */
+export const prependPath = (...dirs: string[]): string => [...dirs, process.env.PATH ?? ''].join(delimiter);
 
 /** sha256 of every file under `root`, including .git, keyed by relative path. */
 export function snapshot(root: string): Map<string, string> {
@@ -106,9 +128,7 @@ process.stdin.on('end', () => {
   }
 });
 `;
-  const path = join(binDir, 'claude');
-  writeFileSync(path, script);
-  chmodSync(path, 0o755);
+  installBin(binDir, 'claude', script);
   return { binDir, logFile };
 }
 
@@ -160,21 +180,29 @@ process.stdin.on('end', () => {
   setTimeout(() => out({ type: 'turn.completed', usage: {} }), schema ? 0 : ${opts.syncDelayMs ?? 0});
 });
 `;
-  const path = join(binDir, 'codex');
-  writeFileSync(path, script);
-  chmodSync(path, 0o755);
+  installBin(binDir, 'codex', script);
   return { binDir, logFile };
 }
 
 /**
- * A PATH with only `dirs` plus node and git: no real claude, codex or gh can leak in.
- * Node goes in its own directory so a fake's `#!/usr/bin/env node` works.
+ * A directory with git (and node, for a fake's `#!/usr/bin/env node`) and nothing else. On
+ * Windows, where symlinks need admin rights, it's git's own directory instead: Git for
+ * Windows keeps only its own tools there.
  */
-export function isolatedPath(...dirs: string[]): string {
+export function gitOnlyDir(): string {
+  const gitPath = findExecutable('git');
+  if (!gitPath) throw new Error('git is not on PATH');
+  if (process.platform === 'win32') return dirname(gitPath);
   const tools = tempDir('tools');
   symlinkSync(process.execPath, join(tools, 'node'));
-  symlinkSync(execFileSync('/usr/bin/which', ['git'], { encoding: 'utf8' }).trim(), join(tools, 'git'));
-  return [...dirs, tools, '/usr/bin', '/bin'].join(':');
+  symlinkSync(gitPath, join(tools, 'git'));
+  return tools;
+}
+
+/** A PATH with only `dirs` plus node, git and the OS's own tools: no real claude, codex or gh can leak in. */
+export function isolatedPath(...dirs: string[]): string {
+  const system = process.platform === 'win32' ? [join(process.env.SystemRoot ?? 'C:\\Windows', 'System32')] : ['/usr/bin', '/bin'];
+  return [...dirs, gitOnlyDir(), ...system].join(delimiter);
 }
 
 export function readCalls(logFile: string): { args: string[]; cwd: string; input: string }[] {

@@ -1,6 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import path from 'node:path';
 import { claudeStream, describeToolUse } from '../server/providers/claude-stream.js';
+import { underRoot } from '../server/providers/steps.js';
 
 test('tool calls read as plain steps, with repo-relative paths', () => {
   assert.equal(describeToolUse('Read', { file_path: '/repo/src/ingest.py' }, '/repo'), 'Reading src/ingest.py');
@@ -11,6 +13,11 @@ test('tool calls read as plain steps, with repo-relative paths', () => {
   assert.equal(describeToolUse('StructuredOutput', {}), 'Writing the spec');
   assert.equal(describeToolUse('Mystery', {}), 'Using Mystery');
   assert.ok(describeToolUse('Bash', { command: 'x'.repeat(500) }).length <= 80, 'long commands are clipped');
+});
+
+test('a Windows path inside the repo reads with forward slashes, like every path on the page', () => {
+  assert.equal(underRoot('C:\\work\\repo\\src\\ingest.py', 'C:\\work\\repo', path.win32), 'src/ingest.py');
+  assert.equal(underRoot('D:\\other\\x.md', 'C:\\work\\repo', path.win32), 'D:\\other\\x.md', 'outside the repo: as given');
 });
 
 test('stream-json chunks split anywhere still yield steps, notes, and the final result', () => {

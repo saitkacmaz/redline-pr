@@ -63,14 +63,17 @@ test('findExecutable searches PATH like which (POSIX) and where (Windows, with P
   writeFileSync(join(a, 'claude'), 'not executable');
   writeFileSync(join(b, 'claude'), '#!/bin/sh\n');
   chmodSync(join(b, 'claude'), 0o755);
-  assert.equal(findExecutable('claude', { pathEnv: `${a}:${b}`, platform: 'linux' }), join(b, 'claude'), 'skips a non-executable file');
-  assert.equal(findExecutable('codex', { pathEnv: `${a}:${b}`, platform: 'linux' }), null);
+  // The executable bit and ':'-separated PATHs only exist on POSIX.
+  if (process.platform !== 'win32') {
+    assert.equal(findExecutable('claude', { pathEnv: `${a}:${b}`, platform: 'linux' }), join(b, 'claude'), 'skips a non-executable file');
+    assert.equal(findExecutable('codex', { pathEnv: `${a}:${b}`, platform: 'linux' }), null);
+  }
 
+  // Lowercase PATHEXT: real Windows ignores case, but Linux (running this branch) doesn't.
   writeFileSync(join(a, 'codex.cmd'), '@echo off\n');
   writeFileSync(join(b, 'codex.exe'), '');
-  // Windows (like macOS) ignores case in file names, so PATHEXT's ".CMD" finds codex.cmd.
-  assert.equal(findExecutable('codex', { pathEnv: `${a};${b}`, platform: 'win32', pathext: '.EXE;.CMD' })?.toLowerCase(), join(a, 'codex.cmd').toLowerCase(), 'first PATH dir wins');
-  assert.equal(findExecutable('claude', { pathEnv: `${a};${b}`, platform: 'win32', pathext: '.EXE;.CMD' }), null, 'no extension, no match on Windows');
+  assert.equal(findExecutable('codex', { pathEnv: `${a};${b}`, platform: 'win32', pathext: '.exe;.cmd' }), join(a, 'codex.cmd'), 'first PATH dir wins');
+  assert.equal(findExecutable('claude', { pathEnv: `${a};${b}`, platform: 'win32', pathext: '.exe;.cmd' }), null, 'no extension, no match on Windows');
 });
 
 const SHIM = `@ECHO off\r\nGOTO start\r\n:find_dp0\r\nSET dp0=%~dp0\r\nEXIT /b\r\n:start\r\nSETLOCAL\r\nCALL :find_dp0\r\n\r\nIF EXIST "%dp0%\\node.exe" (\r\n  SET "_prog=%dp0%\\node.exe"\r\n) ELSE (\r\n  SET "_prog=node"\r\n)\r\n\r\nendLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & "%_prog%"  "%dp0%\\node_modules\\@openai\\codex\\bin\\codex.js" %*\r\n`;
@@ -82,14 +85,14 @@ test('npm .cmd shims on Windows run through node and their script, so stdin and 
 
   const dir = tempDir('shims');
   writeFileSync(join(dir, 'codex.cmd'), SHIM);
-  const target = resolveSpawn('codex', ['exec', 'line one\nline two'], { platform: 'win32', pathEnv: dir, pathext: '.CMD', node: 'node.exe' });
+  const target = resolveSpawn('codex', ['exec', 'line one\nline two'], { platform: 'win32', pathEnv: dir, pathext: '.cmd', node: 'node.exe' });
   assert.deepEqual(target, { file: 'node.exe', args: [join(dir, 'node_modules\\@openai\\codex\\bin\\codex.js'), 'exec', 'line one\nline two'], verbatim: false });
 });
 
 test('a .cmd that is not an npm shim goes through cmd.exe with every argument quoted; POSIX and .exe spawn directly', () => {
   const dir = tempDir('cmds');
   writeFileSync(join(dir, 'gh.cmd'), '@echo off\r\n"C:\\tools\\gh.exe" %*\r\n');
-  const viaCmd = resolveSpawn('gh', ['pr', 'a "quoted" & piped|arg'], { platform: 'win32', pathEnv: dir, pathext: '.CMD', comspec: 'C:\\Windows\\cmd.exe' });
+  const viaCmd = resolveSpawn('gh', ['pr', 'a "quoted" & piped|arg'], { platform: 'win32', pathEnv: dir, pathext: '.cmd', comspec: 'C:\\Windows\\cmd.exe' });
   assert.equal(viaCmd.file, 'C:\\Windows\\cmd.exe');
   assert.equal(viaCmd.verbatim, true);
   assert.deepEqual(viaCmd.args.slice(0, 3), ['/d', '/s', '/c']);
@@ -102,8 +105,8 @@ test('a .cmd that is not an npm shim goes through cmd.exe with every argument qu
 
   mkdirSync(join(dir, 'exe'));
   writeFileSync(join(dir, 'exe', 'git.exe'), '');
-  const exe = resolveSpawn('git', ['status'], { platform: 'win32', pathEnv: join(dir, 'exe'), pathext: '.EXE' });
-  assert.deepEqual({ ...exe, file: exe.file.toLowerCase() }, { file: join(dir, 'exe', 'git.exe').toLowerCase(), args: ['status'], verbatim: false });
+  const exe = resolveSpawn('git', ['status'], { platform: 'win32', pathEnv: join(dir, 'exe'), pathext: '.exe' });
+  assert.deepEqual(exe, { file: join(dir, 'exe', 'git.exe'), args: ['status'], verbatim: false });
   assert.deepEqual(resolveSpawn('claude', ['-p'], { platform: 'linux' }), { file: 'claude', args: ['-p'], verbatim: false });
 });
 

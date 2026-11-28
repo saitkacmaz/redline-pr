@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { chmodSync, writeFileSync } from 'node:fs';
+import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { codexStream, describeCommand, unwrapError, unwrapShell } from '../server/providers/codex-stream.js';
 import { describeCodexFailure, strictSchema } from '../server/providers/codex.js';
@@ -8,7 +8,7 @@ import { chooseAgent, detectProviders, NO_AGENT, onPath } from '../server/provid
 import { claudeLoggedIn } from '../server/providers/claude.js';
 import type { ProviderStatuses } from '../shared/types.js';
 import { SPEC_SCHEMA } from '../server/spec.js';
-import { tempDir } from './helpers.js';
+import { installBin, tempDir } from './helpers.js';
 
 const ROOT = '/work/repo';
 
@@ -196,13 +196,13 @@ test('`claude auth status` counts as logged in only when its JSON says so', () =
 
 test('status checks the binary and the login together, and never logs in when the binary is missing', async () => {
   const bin = tempDir('agents');
-  writeFileSync(join(bin, 'codex'), '#!/bin/sh\n[ "$1 $2" = "login status" ] && { echo "Not logged in"; exit 1; }\nexit 0\n');
-  chmodSync(join(bin, 'codex'), 0o755);
+  installBin(bin, 'codex', "#!/usr/bin/env node\nif (process.argv.slice(2, 4).join(' ') === 'login status') { console.log('Not logged in'); process.exit(1); }\n");
+  // Not runnable: no executable bit on POSIX, no PATHEXT extension on Windows.
   writeFileSync(join(bin, 'claude'), 'not executable');
   assert.equal(await onPath('codex', bin), true);
   assert.equal(await onPath('claude', bin), false, 'a file without the executable bit is not an install');
   const saved = process.env.PATH;
-  process.env.PATH = `${bin}:/usr/bin:/bin`;
+  process.env.PATH = process.platform === 'win32' ? bin : `${bin}:/usr/bin:/bin`;
   try {
     assert.deepEqual(await detectProviders(), { claude: { installed: false, loggedIn: false }, codex: { installed: true, loggedIn: false } });
   } finally {

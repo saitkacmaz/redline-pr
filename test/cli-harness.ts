@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawn, type ChildProcess } from 'node:child_process';
-import { chmodSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { installBin } from './helpers.js';
 import type { ServerEvent, SessionInfo, SpecDocument, SpecResponse, SpecView } from '../shared/types.js';
 
 /** The built CLI, exactly what `redline-pr` runs. `npm test` builds first. */
@@ -14,9 +14,21 @@ export interface Running {
   stop: () => Promise<void>;
 }
 
+/**
+ * The test process's env with `extra` on top. Windows spells it `Path`, and a child given
+ * both `Path` and `PATH` may pick either, so an override replaces every spelling.
+ */
+export function childEnv(extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
+  const env = { ...process.env };
+  for (const key of Object.keys(extra)) {
+    for (const k of Object.keys(env)) if (k !== key && k.toUpperCase() === key.toUpperCase()) delete env[k];
+  }
+  return { ...env, ...extra };
+}
+
 export function runCli(args: string[], opts: { cwd?: string; env?: NodeJS.ProcessEnv } = {}): Promise<{ code: number; out: string }> {
   return new Promise((resolve) => {
-    const child = spawn(process.execPath, [CLI, ...args], { cwd: opts.cwd, env: { ...process.env, ...opts.env } });
+    const child = spawn(process.execPath, [CLI, ...args], { cwd: opts.cwd, env: childEnv(opts.env) });
     let out = '';
     child.stdout.on('data', (d: Buffer) => (out += d.toString()));
     child.stderr.on('data', (d: Buffer) => (out += d.toString()));
@@ -27,7 +39,7 @@ export function runCli(args: string[], opts: { cwd?: string; env?: NodeJS.Proces
 export async function boot(args: string[], opts: { cwd?: string; env?: NodeJS.ProcessEnv } = {}): Promise<Running> {
   const child: ChildProcess = spawn(process.execPath, [CLI, '--no-open', ...args], {
     cwd: opts.cwd,
-    env: { ...process.env, ...opts.env },
+    env: childEnv(opts.env),
   });
   let out = '';
   const url = await new Promise<string>((resolve, reject) => {
@@ -117,9 +129,7 @@ export async function events(r: Running, during: () => Promise<unknown>, settleM
 
 /** A `gh` that is installed but not logged in, so live runs never touch the network. */
 export function fakeGh(binDir: string): void {
-  const path = join(binDir, 'gh');
-  writeFileSync(path, '#!/bin/sh\necho "not logged in" >&2\nexit 1\n');
-  chmodSync(path, 0o755);
+  installBin(binDir, 'gh', "#!/usr/bin/env node\nprocess.stderr.write('not logged in\\n');\nprocess.exit(1);\n");
 }
 
 
@@ -186,9 +196,7 @@ if (a[0] === 'api' && a.some((x) => x.endsWith('/pulls/7/comments'))) {
 }
 process.exit(0);
 `;
-  const path = join(binDir, 'gh');
-  writeFileSync(path, script);
-  chmodSync(path, 0o755);
+  installBin(binDir, 'gh', script);
   return posts;
 }
 

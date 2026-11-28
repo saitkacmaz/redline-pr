@@ -1,13 +1,13 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { chmodSync, existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { PrListResponse, SyncResult } from '../shared/types.js';
-import { api, boot, events, fakeGh, fakeGhWithPr, rawPost, ready, runCli, settled } from './cli-harness.js';
+import { api, boot, childEnv, events, fakeGh, fakeGhWithPr, rawPost, ready, runCli, settled } from './cli-harness.js';
 import { request } from 'node:http';
 import type { PostedReply } from '../shared/types.js';
-import { changedPaths, fakeClaude, fakeCodex, git, isolatedPath, makeRepo, readCalls, snapshot, tempDir } from './helpers.js';
+import { changedPaths, fakeClaude, fakeCodex, git, installBin, isolatedPath, makeRepo, prependPath, readCalls, snapshot, tempDir } from './helpers.js';
 
 const SPEC = {
   sections: [
@@ -94,7 +94,7 @@ test('live run: read-only until Sync, then only the code edit lands in the repo'
   const cache = tempDir('cache');
   const { binDir, logFile } = fakeClaude(SPEC);
   fakeGh(binDir);
-  const env = { XDG_CACHE_HOME: cache, PATH: `${binDir}:${process.env.PATH ?? ''}` };
+  const env = { XDG_CACHE_HOME: cache, PATH: prependPath(binDir) };
 
   // An editor's atomic save of a file the branch did not change: same content, new inode and
   // mtime. Its index stat data is now stale, so porcelain `git diff` would refresh and rewrite
@@ -184,7 +184,7 @@ test('a cached spec is reused without calling claude again', async () => {
   const cache = tempDir('cache');
   const { binDir, logFile } = fakeClaude(SPEC);
   fakeGh(binDir);
-  const env = { XDG_CACHE_HOME: cache, PATH: `${binDir}:${process.env.PATH ?? ''}` };
+  const env = { XDG_CACHE_HOME: cache, PATH: prependPath(binDir) };
   const outputs: string[] = [];
   for (let i = 0; i < 2; i++) {
     const r = await boot([], { cwd: repo, env });
@@ -204,7 +204,7 @@ test('a failing claude -p shows its message in the page and writes nothing to th
   const { binDir } = fakeClaude(SPEC, { failSpec: JSON.stringify({ type: 'result', is_error: true, result: 'Not logged in · Please run /login' }) });
   fakeGh(binDir);
   const before = snapshot(repo);
-  const r = await boot([], { cwd: repo, env: { XDG_CACHE_HOME: tempDir('cache'), PATH: `${binDir}:${process.env.PATH ?? ''}` } });
+  const r = await boot([], { cwd: repo, env: { XDG_CACHE_HOME: tempDir('cache'), PATH: prependPath(binDir) } });
   try {
     const { view } = await settled(r);
     assert.equal(view.status, 'error');
@@ -220,7 +220,7 @@ test('replies post only on request, only what the user wrote, and never twice', 
   const repo = makeRepo();
   const { binDir } = fakeClaude({ ...SPEC, commentMap: [{ commentId: 'rc-11', clauseId: 's1-c1' }] });
   const posts = fakeGhWithPr(binDir);
-  const r = await boot([], { cwd: repo, env: { XDG_CACHE_HOME: tempDir('cache'), PATH: `${binDir}:${process.env.PATH ?? ''}` } });
+  const r = await boot([], { cwd: repo, env: { XDG_CACHE_HOME: tempDir('cache'), PATH: prependPath(binDir) } });
   try {
     const { doc, view } = await ready(r);
     assert.equal(view.canPostReplies, true);
@@ -296,7 +296,7 @@ test('a PR that is not checked out is read from gh pr diff, and Run is refused',
   const { binDir, logFile } = fakeClaude(SPEC);
   fakeGhWithPr(binDir);
   const before = snapshot(repo);
-  const r = await boot(['8'], { cwd: repo, env: { XDG_CACHE_HOME: tempDir('cache'), PATH: `${binDir}:${process.env.PATH ?? ''}` } });
+  const r = await boot(['8'], { cwd: repo, env: { XDG_CACHE_HOME: tempDir('cache'), PATH: prependPath(binDir) } });
   try {
     const { doc, view } = await ready(r);
     assert.equal(doc.prNumber, 8);
@@ -327,7 +327,7 @@ test('a shallow clone explains how to fetch the missing history', async () => {
   git(clone, 'checkout', '-q', 'feat');
   const { binDir } = fakeClaude(SPEC);
   fakeGh(binDir);
-  const r = await boot(['--base', 'main'], { cwd: clone, env: { XDG_CACHE_HOME: tempDir('cache'), PATH: `${binDir}:${process.env.PATH ?? ''}` } });
+  const r = await boot(['--base', 'main'], { cwd: clone, env: { XDG_CACHE_HOME: tempDir('cache'), PATH: prependPath(binDir) } });
   try {
     const { view } = await settled(r);
     assert.match(view.status === 'error' ? view.message : '', /shallow clone.*git fetch --unshallow/);
@@ -340,7 +340,7 @@ test('two tabs posting the same reply at once post it once', async () => {
   const repo = makeRepo();
   const { binDir } = fakeClaude({ ...SPEC, commentMap: [{ commentId: 'rc-11', clauseId: 's1-c1' }] });
   const posts = fakeGhWithPr(binDir, { postDelayMs: 400 });
-  const r = await boot([], { cwd: repo, env: { XDG_CACHE_HOME: tempDir('cache'), PATH: `${binDir}:${process.env.PATH ?? ''}` } });
+  const r = await boot([], { cwd: repo, env: { XDG_CACHE_HOME: tempDir('cache'), PATH: prependPath(binDir) } });
   try {
     const { doc } = await ready(r);
     doc.comments[0]!.replyDraft = 'On it.';
@@ -358,7 +358,7 @@ test('a PR already merged into the base is not this checkout; a renamed checkout
   const repo = makeRepo();
   const mainSha = git(repo, 'rev-parse', 'main').trim();
   const headSha = git(repo, 'rev-parse', 'HEAD').trim();
-  const env = (binDir: string) => ({ XDG_CACHE_HOME: tempDir('cache'), PATH: `${binDir}:${process.env.PATH ?? ''}` });
+  const env = (binDir: string) => ({ XDG_CACHE_HOME: tempDir('cache'), PATH: prependPath(binDir) });
 
   const old = fakeClaude(SPEC);
   fakeGhWithPr(old.binDir, { headRefName: 'old-feature', headRefOid: mainSha });
@@ -379,16 +379,16 @@ test('a PR already merged into the base is not this checkout; a renamed checkout
   }
 });
 
-test('Ctrl-C while the spec is being written stops claude too', async () => {
+// Windows has no SIGINT to send a process; there a console Ctrl-C reaches the whole process tree itself.
+test('Ctrl-C while the spec is being written stops claude too', { skip: process.platform === 'win32' }, async () => {
   const repo = makeRepo();
   const binDir = tempDir('bin');
   const pidFile = join(binDir, 'pid');
-  writeFileSync(join(binDir, 'claude'), `#!/bin/sh\necho $$ > ${pidFile}\nexec sleep 60\n`);
-  chmodSync(join(binDir, 'claude'), 0o755);
+  installBin(binDir, 'claude', `#!/usr/bin/env node\nrequire('node:fs').writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));\nsetInterval(() => {}, 1000);\n`);
   fakeGh(binDir);
   const child = spawn(process.execPath, [join(import.meta.dirname, '..', 'dist', 'bin', 'cli.js'), '--no-open'], {
     cwd: repo,
-    env: { ...process.env, XDG_CACHE_HOME: tempDir('cache'), PATH: `${binDir}:${process.env.PATH ?? ''}` },
+    env: childEnv({ XDG_CACHE_HOME: tempDir('cache'), PATH: prependPath(binDir) }),
   });
   for (let i = 0; i < 100 && !existsSync(pidFile); i++) await new Promise((r) => setTimeout(r, 50));
   const pid = Number(readFileSync(pidFile, 'utf8'));
@@ -413,7 +413,7 @@ test('a positional number is the PR; two different PR numbers, or a stray word, 
   const repo = makeRepo();
   const { binDir } = fakeClaude(SPEC);
   fakeGhWithPr(binDir, { currentPr: false });
-  const env = { XDG_CACHE_HOME: tempDir('cache'), PATH: `${binDir}:${process.env.PATH ?? ''}` };
+  const env = { XDG_CACHE_HOME: tempDir('cache'), PATH: prependPath(binDir) };
   const r = await boot(['7'], { cwd: repo, env });
   try {
     assert.equal((await ready(r)).doc.prNumber, 7, '`redline 7` loads PR #7 even though the branch lookup finds none');
@@ -434,7 +434,7 @@ test('no PR and no local changes: the page still boots, says so, and lists PRs t
   const { binDir, logFile } = fakeClaude(SPEC);
   fakeGhWithPr(binDir, { currentPr: false });
   const before = snapshot(repo);
-  const r = await boot([], { cwd: repo, env: { XDG_CACHE_HOME: tempDir('cache'), PATH: `${binDir}:${process.env.PATH ?? ''}` } });
+  const r = await boot([], { cwd: repo, env: { XDG_CACHE_HOME: tempDir('cache'), PATH: prependPath(binDir) } });
   try {
     const { view, session } = await settled(r);
     assert.equal(view.status, 'empty');
@@ -462,12 +462,12 @@ test('a repo on GitLab reviews its local diff: no PRs, no comments, no error, an
   git(repo, 'remote', 'set-url', 'origin', 'git@gitlab.com:acme/app.git');
   const { binDir } = fakeClaude(SPEC);
   // gh is logged in to github.com, but this remote isn't a GitHub host: what real gh prints.
-  writeFileSync(
-    join(binDir, 'gh'),
-    '#!/bin/sh\n[ "$1" = auth ] && exit 0\necho "none of the git remotes configured for this repository point to a known GitHub host." >&2\nexit 1\n',
+  installBin(
+    binDir,
+    'gh',
+    "#!/usr/bin/env node\nif (process.argv[2] === 'auth') process.exit(0);\nprocess.stderr.write('none of the git remotes configured for this repository point to a known GitHub host.\\n');\nprocess.exit(1);\n",
   );
-  chmodSync(join(binDir, 'gh'), 0o755);
-  const env = { XDG_CACHE_HOME: tempDir('cache'), PATH: `${binDir}:${process.env.PATH ?? ''}` };
+  const env = { XDG_CACHE_HOME: tempDir('cache'), PATH: prependPath(binDir) };
   const before = snapshot(repo);
   const r = await boot([], { cwd: repo, env });
   try {
@@ -503,9 +503,8 @@ test('a local-only repo with no remote and no default branch name still boots an
   git(repo, 'commit', '-qam', 'change');
   const { binDir, logFile } = fakeClaude(SPEC);
   const ghLog = join(binDir, 'gh-calls');
-  writeFileSync(join(binDir, 'gh'), `#!/bin/sh\necho "$*" >> ${JSON.stringify(ghLog)}\nexit 0\n`);
-  chmodSync(join(binDir, 'gh'), 0o755);
-  const env = { XDG_CACHE_HOME: tempDir('cache'), PATH: `${binDir}:${process.env.PATH ?? ''}` };
+  installBin(binDir, 'gh', `#!/usr/bin/env node\nrequire('node:fs').appendFileSync(${JSON.stringify(ghLog)}, process.argv.slice(2).join(' ') + '\\n');\n`);
+  const env = { XDG_CACHE_HOME: tempDir('cache'), PATH: prependPath(binDir) };
 
   const r = await boot([], { cwd: repo, env });
   try {
@@ -534,7 +533,7 @@ test('/api/events streams the real steps of a load and a run', async () => {
   const repo = makeRepo();
   const { binDir } = fakeClaude(SPEC, { syncDelayMs: 300 });
   fakeGh(binDir);
-  const r = await boot([], { cwd: repo, env: { XDG_CACHE_HOME: tempDir('cache'), PATH: `${binDir}:${process.env.PATH ?? ''}` } });
+  const r = await boot([], { cwd: repo, env: { XDG_CACHE_HOME: tempDir('cache'), PATH: prependPath(binDir) } });
   try {
     const { doc } = await ready(r);
     const loadSteps = (await events(r, () => api(r, '/api/load', { target: { kind: 'current' } })))

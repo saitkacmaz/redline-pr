@@ -133,6 +133,8 @@ test('renames, mode changes, and binary files are reported, not dropped', async 
       chmodSync(join(d, 'run.sh'), 0o755);
       writeRaw(join(d, 'img.bin'), Buffer.from([0, 1, 2, 3, 0, 9]));
       git(d, 'add', '-A');
+      // Windows has no executable bit, so git takes the mode from the index there.
+      git(d, 'update-index', '--chmod=+x', 'run.sh');
     },
     (d) => {
       write(d, 'old.txt', 'same content\nacross the rename\n');

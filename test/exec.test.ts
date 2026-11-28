@@ -28,7 +28,9 @@ test('stdin is delivered and exit codes pass through', async () => {
 
 test('a timeout still fires when the leader exited but a descendant holds the pipes', async () => {
   const started = Date.now();
-  const res = await run('sh', ['-c', 'sleep 30 & echo hi'], { timeoutMs: 400 });
+  // The leader starts a grandchild that inherits its pipes, prints, and exits at once.
+  const grandchild = `require('node:child_process').spawn(process.execPath, ['-e', 'setTimeout(() => {}, 30000)'], { stdio: 'inherit' }).unref(); console.log('hi')`;
+  const res = await run(process.execPath, ['-e', grandchild], { timeoutMs: 400 });
   assert.equal(res.timedOut, true);
   assert.ok(Date.now() - started < 3000, `took ${Date.now() - started}ms`);
 });

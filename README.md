@@ -108,7 +108,7 @@ The page opens right away and loads in place. While a spec is being written or t
 
 #### Requirements
 
-- Node 20+ and `git`.
+- Node 22+ and `git`.
 - At least one agent CLI on `PATH`, logged in:
   - [Claude Code](https://claude.com/claude-code) (`claude`), with your Claude login. No `ANTHROPIC_API_KEY`.
   - [Codex CLI](https://developers.openai.com/codex/cli) (`codex`), after `codex login` with your ChatGPT account. No `OPENAI_API_KEY`.

@@ -1,5 +1,6 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { existsSync } from 'node:fs';
+import { join } from 'node:path';
 import { createServer } from 'node:net';
 import { tempDir } from './helpers.js';
 
@@ -10,6 +11,9 @@ const CANDIDATES = [
   '/usr/bin/google-chrome',
   '/usr/bin/chromium',
   '/usr/bin/chromium-browser',
+  ...[process.env.PROGRAMFILES, process.env['PROGRAMFILES(X86)'], process.env.LOCALAPPDATA].flatMap((dir) =>
+    dir ? [join(dir, 'Google', 'Chrome', 'Application', 'chrome.exe'), join(dir, 'Chromium', 'Application', 'chrome.exe')] : [],
+  ),
 ];
 
 /** A local Chrome/Chromium binary, or undefined (browser tests then skip). */
@@ -65,7 +69,8 @@ export class Browser {
     const port = await freePort();
     const chrome = spawn(
       chromePath,
-      ['--headless=new', '--disable-gpu', '--no-first-run', `--user-data-dir=${tempDir('chrome')}`, `--remote-debugging-port=${port}`, '--window-size=1400,1000', 'about:blank'],
+      // --hide-scrollbars: layouts measure the same as on a Mac (overlay scrollbars), whatever the OS draws.
+      ['--headless=new', '--disable-gpu', '--hide-scrollbars', '--no-first-run', `--user-data-dir=${tempDir('chrome')}`, `--remote-debugging-port=${port}`, '--window-size=1400,1000', 'about:blank'],
       { stdio: 'ignore' },
     );
     let target: { type: string; webSocketDebuggerUrl: string } | undefined;

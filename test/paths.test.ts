@@ -1,9 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { artifactDir } from '../server/paths.js';
+import { cacheRoot } from '../server/platform.js';
 import { fileTree, flattenTree, lineRange, normalizePath, splitPath } from '../web/src/paths.js';
 import { tempDir } from './helpers.js';
 
@@ -26,10 +26,10 @@ test('artifacts live under XDG_CACHE_HOME/redline-pr/<sha256 of repo path>', () 
   assert.equal(dir, join(cache, 'redline-pr', createHash('sha256').update(repo).digest('hex')));
 });
 
-test('defaults to ~/.cache and ignores a relative XDG_CACHE_HOME', () => {
+test('defaults to the platform cache root and ignores a relative XDG_CACHE_HOME', () => {
   const repo = tempDir('p');
   const dir = withXdg('relative/cache', () => artifactDir(repo));
-  assert.ok(dir.startsWith(join(homedir(), '.cache', 'redline-pr')));
+  assert.ok(dir.startsWith(withXdg(undefined, () => cacheRoot())), dir);
 });
 
 test('refuses a cache dir inside the repository', () => {

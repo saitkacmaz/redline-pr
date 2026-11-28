@@ -1,10 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
-import { chmodSync, existsSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { findPullRequest, githubAccess, listPullRequests, NotOnGitHubError, triageThreads, type ReviewThread } from '../server/github.js';
-import { git, makeRepo, tempDir } from './helpers.js';
+import { git, gitOnlyDir, installBin, makeRepo, prependPath, tempDir } from './helpers.js';
 
 let nextId = 100;
 const msg = (login: string, body: string, bot = false) => ({
@@ -82,11 +81,17 @@ test('bot threads and bot replies are dropped; removed-line comments keep their 
 function failingGh(stderr: string, authCode = 0): { bin: string; calls: () => string[][] } {
   const bin = tempDir('gh');
   const log = join(bin, 'calls.jsonl');
-  writeFileSync(
-    join(bin, 'gh'),
-    `#!/bin/sh\nprintf '%s\\n' "$*" >> ${JSON.stringify(log)}\n[ "$1" = auth ] && exit ${authCode}\necho ${JSON.stringify(stderr)} >&2\nexit 1\n`,
+  installBin(
+    bin,
+    'gh',
+    `#!/usr/bin/env node
+const args = process.argv.slice(2);
+require('node:fs').appendFileSync(${JSON.stringify(log)}, args.join(' ') + '\\n');
+if (args[0] === 'auth') process.exit(${authCode});
+process.stderr.write(${JSON.stringify(stderr + '\n')});
+process.exit(1);
+`,
   );
-  chmodSync(join(bin, 'gh'), 0o755);
   return { bin, calls: () => (existsSync(log) ? readFileSync(log, 'utf8').trim().split('\n').map((l) => l.split(' ')) : []) };
 }
 
@@ -107,7 +112,7 @@ test('a repo with no remote never runs gh, and says so calmly', async () => {
   const repo = makeRepo();
   git(repo, 'remote', 'remove', 'origin');
   const gh = failingGh('should not be called');
-  const access = await withPath(`${gh.bin}:${process.env.PATH ?? ''}`, () => githubAccess(repo));
+  const access = await withPath(prependPath(gh.bin), () => githubAccess(repo));
   assert.deepEqual(access, { ok: false, reason: 'no-remote', note: 'This repository has no remote, so there are no pull requests here.' });
   assert.deepEqual(gh.calls(), []);
 });
@@ -116,7 +121,7 @@ test('a remote on GitLab is "not on GitHub", not a failure: no PR for the branch
   const repo = makeRepo();
   git(repo, 'remote', 'set-url', 'origin', 'git@gitlab.com:acme/app.git');
   const gh = failingGh(GITLAB_STDERR);
-  await withPath(`${gh.bin}:${process.env.PATH ?? ''}`, async () => {
+  await withPath(prependPath(gh.bin), async () => {
     assert.deepEqual(await githubAccess(repo), { ok: true }, 'gh itself is logged in; only the remote is elsewhere');
     await assert.rejects(findPullRequest(repo), NotOnGitHubError);
     await assert.rejects(findPullRequest(repo, 5), NotOnGitHubError);
@@ -127,7 +132,7 @@ test('a remote on GitLab is "not on GitHub", not a failure: no PR for the branch
 test('any other gh failure on the branch lookup means "no PR", and an explicit PR says what gh said', async () => {
   const repo = makeRepo();
   const gh = failingGh('error connecting to api.github.com');
-  await withPath(`${gh.bin}:${process.env.PATH ?? ''}`, async () => {
+  await withPath(prependPath(gh.bin), async () => {
     assert.equal(await findPullRequest(repo), null);
     await assert.rejects(findPullRequest(repo, 5), /error connecting to api\.github\.com/);
   });
@@ -136,13 +141,11 @@ test('any other gh failure on the branch lookup means "no PR", and an explicit P
 test('gh missing or logged out turns GitHub off with a one-line reason', async () => {
   const repo = makeRepo();
   // Only git on PATH (and node, which the git wrapper doesn't need): no gh anywhere.
-  const gitOnly = tempDir('gitonly');
-  symlinkSync(execFileSync('/usr/bin/which', ['git'], { encoding: 'utf8' }).trim(), join(gitOnly, 'git'));
-  const missing = await withPath(gitOnly, () => githubAccess(repo));
+  const missing = await withPath(gitOnlyDir(), () => githubAccess(repo));
   assert.equal(missing.ok ? '' : missing.reason, 'no-gh');
 
   const gh = failingGh('You are not logged into any GitHub hosts.', 1);
-  const loggedOut = await withPath(`${gh.bin}:${process.env.PATH ?? ''}`, () => githubAccess(repo));
+  const loggedOut = await withPath(prependPath(gh.bin), () => githubAccess(repo));
   assert.equal(loggedOut.ok ? '' : loggedOut.reason, 'no-login');
   assert.match(loggedOut.ok ? '' : loggedOut.note, /gh auth login/);
 });

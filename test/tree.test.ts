@@ -10,7 +10,9 @@ test('a run is reported relative to what was on disk before it, not to HEAD', as
   git(dir, 'init', '-q', '-b', 'main');
   write(dir, 'clean.js', 'a\n');
   write(dir, 'dirty.js', 'one\ntwo\n');
-  write(dir, 'q"uote.ts', 'x\n');
+  // A file name git has to quote. Windows forbids `"` in names, so a space stands in there.
+  const ODD = process.platform === 'win32' ? 'sp ace.ts' : 'q"uote.ts';
+  write(dir, ODD, 'x\n');
   write(dir, 'gone.js', 'bye\n');
   git(dir, 'add', '-A');
   git(dir, 'commit', '-qm', 'base');
@@ -26,18 +28,18 @@ test('a run is reported relative to what was on disk before it, not to HEAD', as
   write(dir, 'clean.js', 'a\nb\n');
   write(dir, 'dirty.js', 'one\ntwo\nmine\nclaude\n');
   write(dir, 'notes.txt', 'draft\nedited\n');
-  write(dir, 'q"uote.ts', 'y\n');
+  write(dir, ODD, 'y\n');
   write(dir, 'new.js', 'fresh\n');
   rmSync(join(dir, 'gone.js'));
 
   const changes = await changesBetween(dir, before, await treeState(dir));
-  assert.deepEqual(changes.files, ['clean.js', 'dirty.js', 'gone.js', 'new.js', 'notes.txt', 'q"uote.ts']);
+  assert.deepEqual(changes.files, ['clean.js', 'dirty.js', 'gone.js', 'new.js', 'notes.txt', ODD].sort());
 
   const patch = (p: string): string => changes.diff.split(/^(?=diff --git )/m).find((c) => c.startsWith(`diff --git a/${p} `)) ?? '';
   assert.match(patch('dirty.js'), /^\+claude$/m);
   assert.doesNotMatch(patch('dirty.js'), /^\+mine$/m, "the user's earlier edit is not shown as Claude's");
   assert.match(patch('notes.txt'), /^\+edited$/m);
-  assert.match(patch('q"uote.ts'), /^\+y$/m);
+  assert.match(patch(ODD), /^\+y$/m);
   assert.match(patch('new.js'), /^\+fresh$/m);
   assert.match(patch('gone.js'), /^-bye$/m);
   assert.deepEqual(changedPaths(gitBefore, snapshot(join(dir, '.git'))), [], 'snapshots never write .git');

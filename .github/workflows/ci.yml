@@ -25,11 +25,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
-        node: [20, 22, 24]
-    env:
-      # test/browser.ts only probes macOS and Linux paths; without this the browser tests
-      # would skip on Windows instead of running.
-      CHROME_PATH: ${{ matrix.os == 'windows-latest' && 'C:\Program Files\Google\Chrome\Application\chrome.exe' || '' }}
+        node: [22, 24]
     steps:
       - uses: actions/checkout@v4
 

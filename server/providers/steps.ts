@@ -1,4 +1,4 @@
-import { isAbsolute, relative } from 'node:path';
+import nodePath from 'node:path';
 import { tmpdir } from 'node:os';
 import { run } from '../exec.js';
 import { findExecutable } from '../platform.js';
@@ -16,11 +16,14 @@ export const clip = (text: string, max = 72): string => {
   return line.length > max ? `${line.slice(0, max - 1)}…` : line;
 };
 
-/** `path` relative to `root` when it lies inside it; otherwise as given. */
-export function underRoot(path: string, root?: string): string {
-  if (root && isAbsolute(path)) {
-    const rel = relative(root, path);
-    if (rel && !rel.startsWith('..') && !isAbsolute(rel)) return rel;
+/**
+ * `path` relative to `root` when it lies inside it, with forward slashes like every other
+ * path on the page (`src/app.js`, not `src\app.js` on Windows); otherwise as given.
+ */
+export function underRoot(path: string, root?: string, p: typeof nodePath.posix = nodePath): string {
+  if (root && p.isAbsolute(path)) {
+    const rel = p.relative(root, path);
+    if (rel && !rel.startsWith('..') && !p.isAbsolute(rel)) return rel.split(p.sep).join('/');
   }
   return path;
 }
